@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # === PostgreSQL ===
+  postgres:
+    image: postgres:15-alpine
+    container_name: fleet_postgres1
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-securepassword123}
+      POSTGRES_DB: mobility_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d mobility_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    networks:
+      - fleet_net
+    ports:
+      - "5432:5432"
+
+  # === Redis ===
+  redis:
+    image: redis:7-alpine
+    container_name: fleet_redis1
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - fleet_net
+
+  # === API Service ===
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_api1
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=${APP_ENV:-development}
+      - DEBUG=${DEBUG:-true}
+      - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
+      - REDIS_URL=redis://redis:6379/0
+      - MOBILITY_API_URL=${MOBILITY_API_URL}
+      - MOBILITY_AUTH_URL=${MOBILITY_AUTH_URL}
+      - MOBILITY_CLIENT_ID=${MOBILITY_CLIENT_ID}
+      - MOBILITY_CLIENT_SECRET=${MOBILITY_CLIENT_SECRET}
+      - MOBILITY_TENANT_ID=${MOBILITY_TENANT_ID}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-08-01-preview}
+      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o-mini}
+      - AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-ada-002}
+      - INFOBIP_API_KEY=${INFOBIP_API_KEY}
+      - INFOBIP_BASE_URL=${INFOBIP_BASE_URL:-api.infobip.com}
+      - INFOBIP_SECRET_KEY=${INFOBIP_SECRET_KEY}
+      - INFOBIP_SENDER_NUMBER=${INFOBIP_SENDER_NUMBER}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - fleet_net
+
+  # === Worker Service ===
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_worker1
+    restart: unless-stopped
+    command: python worker.py
+    environment:
+      - APP_ENV=${APP_ENV:-development}
+      - DEBUG=${DEBUG:-true}
+      - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
+      - REDIS_URL=redis://redis:6379/0
+      - MOBILITY_API_URL=${MOBILITY_API_URL}
+      - MOBILITY_AUTH_URL=${MOBILITY_AUTH_URL}
+      - MOBILITY_CLIENT_ID=${MOBILITY_CLIENT_ID}
+      - MOBILITY_CLIENT_SECRET=${MOBILITY_CLIENT_SECRET}
+      - MOBILITY_TENANT_ID=${MOBILITY_TENANT_ID}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-08-01-preview}
+      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o-mini}
+      - AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-ada-002}
+      - INFOBIP_API_KEY=${INFOBIP_API_KEY}
+      - INFOBIP_BASE_URL=${INFOBIP_BASE_URL:-api.infobip.com}
+      - INFOBIP_SENDER_NUMBER=${INFOBIP_SENDER_NUMBER}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - fleet_net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  fleet_net:
+    driver: bridge

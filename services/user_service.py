@@ -1,0 +1,266 @@
+"""
+User Service
+Version: 10.0
+
+User identity management.
+DEPENDS ON: api_gateway.py, cache_service.py, models.py, config.py
+"""
+
+import logging
+from datetime import datetime
+from typing import Optional, Tuple, Dict, Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from models import UserMapping
+from config import get_settings
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+class UserService:
+    """
+    User identity management.
+    
+    Handles:
+    - User lookup by phone
+    - Auto-onboarding from API
+    - Context building
+    """
+    
+    def __init__(
+        self,
+        db: AsyncSession,
+        gateway=None,
+        cache=None
+    ):
+        """
+        Initialize user service.
+        
+        Args:
+            db: Database session
+            gateway: API Gateway (optional)
+            cache: Cache service (optional)
+        """
+        self.db = db
+        self.gateway = gateway
+        self.cache = cache
+        self.tenant_id = settings.tenant_id
+    
+    async def get_active_identity(self, phone: str) -> Optional[UserMapping]:
+        """
+        Get user from database.
+        
+        Args:
+            phone: Phone number
+            
+        Returns:
+            UserMapping or None
+        """
+        try:
+            stmt = select(UserMapping).where(
+                UserMapping.phone_number == phone,
+                UserMapping.is_active == True
+            )
+            result = await self.db.execute(stmt)
+            return result.scalars().first()
+        except Exception as e:
+            logger.error(f"DB lookup failed: {e}")
+            return None
+    
+    async def try_auto_onboard(self, phone: str) -> Optional[Tuple[str, str]]:
+        """
+        Try to onboard user from API.
+        
+        Args:
+            phone: Phone number
+            
+        Returns:
+            (display_name, vehicle_info) or None
+        """
+        if not self.gateway:
+            return None
+        
+        try:
+            # Clean phone
+            clean_phone = "".join(c for c in phone if c.isdigit())
+            if clean_phone.startswith("00"):
+                clean_phone = clean_phone[2:]
+            
+            # Import here to avoid circular import
+            from services.api_gateway import HttpMethod
+            
+            # Search by phone
+            response = await self.gateway.execute(
+                method=HttpMethod.GET,
+                path="/tenantmgt/Persons",
+                params={"Filter": f"Phone(=){clean_phone}"}
+            )
+            
+            if not response.success:
+                return None
+            
+            data = response.data
+            items = data if isinstance(data, list) else data.get("Items", [])
+            
+            if not items:
+                return None
+            
+            person = items[0]
+            person_id = person.get("Id")
+            display_name = self._extract_name(person)
+            
+            if not person_id:
+                return None
+            
+            # Get vehicle info
+            vehicle_info = await self._get_vehicle_info(person_id)
+            
+            # Save mapping
+            await self._save_mapping(phone, person_id, display_name)
+            
+            return (display_name, vehicle_info)
+            
+        except Exception as e:
+            logger.error(f"Auto-onboard failed: {e}")
+            return None
+    
+    def _extract_name(self, person: Dict) -> str:
+        """Extract display name from person data."""
+        name = (
+            person.get("DisplayName") or
+            f"{person.get('FirstName', '')} {person.get('LastName', '')}".strip() or
+            "Korisnik"
+        )
+        
+        # Clean "A-1 - Surname, Name" format
+        if " - " in name:
+            parts = name.split(" - ")
+            if len(parts) > 1:
+                name_part = parts[-1].strip()
+                if ", " in name_part:
+                    surname, firstname = name_part.split(", ", 1)
+                    name = f"{firstname} {surname}"
+                else:
+                    name = name_part
+        
+        return name
+    
+    async def _get_vehicle_info(self, person_id: str) -> str:
+        """Get vehicle description for person."""
+        try:
+            from services.api_gateway import HttpMethod
+            
+            response = await self.gateway.execute(
+                method=HttpMethod.GET,
+                path="/automation/MasterData",
+                params={"personId": person_id}
+            )
+            
+            if not response.success:
+                return "Nepoznato"
+            
+            data = response.data
+            
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            elif isinstance(data, dict) and "Data" in data:
+                items = data["Data"]
+                data = items[0] if items else {}
+            
+            plate = data.get("LicencePlate") or data.get("Plate")
+            name = data.get("FullVehicleName") or data.get("DisplayName")
+            
+            if plate:
+                return f"{name or 'Vozilo'} ({plate})"
+            return name or "Nema dodijeljenog vozila"
+            
+        except Exception:
+            return "Nepoznato"
+    
+    async def _save_mapping(self, phone: str, person_id: str, name: str) -> None:
+        """Save user mapping to database."""
+        try:
+            stmt = pg_insert(UserMapping).values(
+                phone_number=phone,
+                api_identity=person_id,
+                display_name=name,
+                is_active=True,
+                updated_at=datetime.utcnow()
+            ).on_conflict_do_update(
+                index_elements=['phone_number'],
+                set_={
+                    'api_identity': person_id,
+                    'display_name': name,
+                    'is_active': True,
+                    'updated_at': datetime.utcnow()
+                }
+            )
+            await self.db.execute(stmt)
+            await self.db.commit()
+            logger.info(f"Saved mapping for {phone[-4:]}")
+        except Exception as e:
+            logger.error(f"Save mapping failed: {e}")
+            await self.db.rollback()
+    
+    async def build_context(
+        self,
+        person_id: str,
+        phone: str
+    ) -> Dict[str, Any]:
+        """
+        Build operational context for user.
+        
+        Args:
+            person_id: MobilityOne person ID
+            phone: Phone number
+            
+        Returns:
+            Context dictionary
+        """
+        context = {
+            "person_id": person_id,
+            "phone": phone,
+            "tenant_id": self.tenant_id,
+            "display_name": "Korisnik",
+            "vehicle": {}
+        }
+        
+        if not self.gateway:
+            return context
+        
+        try:
+            from services.api_gateway import HttpMethod
+            
+            response = await self.gateway.execute(
+                method=HttpMethod.GET,
+                path="/automation/MasterData",
+                params={"personId": person_id}
+            )
+            
+            if response.success:
+                data = response.data
+                
+                if isinstance(data, list):
+                    data = data[0] if data else {}
+                elif isinstance(data, dict) and "Data" in data:
+                    data = data["Data"][0] if data["Data"] else {}
+                
+                context["vehicle"] = {
+                    "id": data.get("Id") or data.get("VehicleId") or "",
+                    "plate": data.get("LicencePlate") or data.get("Plate") or "",
+                    "name": data.get("FullVehicleName") or "Vozilo",
+                    "vin": data.get("VIN") or "",
+                    "mileage": str(data.get("Mileage", "N/A"))
+                }
+                
+                if data.get("Driver"):
+                    context["display_name"] = self._extract_name({"DisplayName": data["Driver"]})
+                    
+        except Exception as e:
+            logger.warning(f"Build context failed: {e}")
+        
+        return context
