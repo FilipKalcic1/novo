@@ -106,57 +106,52 @@ class UserService:
     # ... (rest of class)
     
     async def try_auto_onboard(self, phone: str) -> Optional[Tuple[str, str]]:
-        """
-        Try to onboard user from API.
-        
-        Args:
-            phone: Phone number
-            
-        Returns:
-            (display_name, vehicle_info) or None
-        """
+        """Pokušaj onboardanja koristeći isključivo 'Phone' polje s varijacijama."""
         if not self.gateway:
             return None
         
         try:
-            # Clean phone
-            clean_phone = "".join(c for c in phone if c.isdigit())
-            if clean_phone.startswith("00"):
-                clean_phone = clean_phone[2:]
-            
-            # Import here to avoid circular import
+            # Čistimo broj na dva načina (međunarodni i lokalni)
+            # 1. 38595... (bez plusa)
+            clean_intl = phone.replace("+", "").strip().replace(" ", "")
+            # 2. 095... (ako je slučajno tako spremljeno u bazi)
+            clean_local = clean_intl
+            if clean_intl.startswith("385"):
+                clean_local = "0" + clean_intl[3:]
+
+            variations = [clean_intl, clean_local]
             from services.api_gateway import HttpMethod
-            
-            # Search by phone
-            response = await self.gateway.execute(
-                method=HttpMethod.GET,
-                path="/tenantmgt/Persons",
-                params={"Filter": f"Phone(=){clean_phone}"}
-            )
-            
-            if not response.success:
-                return None
-            
-            data = response.data
-            items = data if isinstance(data, list) else data.get("Items", [])
-            
-            if not items:
-                return None
-            
-            person = items[0]
-            person_id = person.get("Id")
-            display_name = self._extract_name(person)
-            
-            if not person_id:
-                return None
-            
-            # Get vehicle info
-            vehicle_info = await self._get_vehicle_info(person_id)
-            
-            # Save mapping
-            await self._save_mapping(phone, person_id, display_name)
-            
-            return (display_name, vehicle_info)
+
+            for phone_var in variations:
+                logger.info(f"Tražim korisnika po broju: {phone_var}")
+                
+                # Koristimo točan format koji je potvrdio curl i log
+                filter_str = f"Phone%28=%29{phone_var}"
+                
+                response = await self.gateway.execute(
+                    method=HttpMethod.GET,
+                    path="/tenantmgt/Persons",
+                    params={"Filter": filter_str}
+                )
+
+                if response.success:
+                    data = response.data
+                    items = data if isinstance(data, list) else data.get("Items", [])
+                    
+                    if items:
+                        person = items[0]
+                        person_id = person.get("Id")
+                        display_name = person.get("DisplayName", "Korisnik")
+                        
+                        logger.info(f"✅ Korisnik pronađen: {display_name}")
+                        
+                        # Spremanje u bazu
+                        vehicle_info = await self._get_vehicle_info(person_id)
+                        await self._upsert_mapping(phone, person_id, display_name)
+                        return (display_name, vehicle_info)
+
+            logger.warning(f"❌ Korisnik nije pronađen na API-ju niti s jednom varijacijom: {variations}")
+            return None
             
         except Exception as e:
             logger.error(f"Auto-onboard failed: {e}")
