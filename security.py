@@ -36,19 +36,18 @@ def verify_infobip_signature(
     Returns:
         True if valid
     """
+    # 1. Bypass signature check if DEBUG is enabled (Development mode)
+    if settings.DEBUG:
+        return True
+
     if not signature:
         return False
     
     secret = secret or settings.INFOBIP_SECRET_KEY
     if not secret:
-        # Allow in development without secret
-        logger.warning("No Infobip secret configured")
-        return True
-    
-    # TEMPORARY DEBUGGING START (REMOVE AFTER USE)
-    if settings.DEBUG: # Only log this sensitive info in debug mode
-        logger.debug(f"DEBUG: Using INFOBIP_SECRET_KEY for HMAC: '{secret}'")
-    # TEMPORARY DEBUGGING END
+        # If no secret is configured, verification should fail unless in DEBUG mode.
+        logger.warning("INFOBIP_SECRET_KEY is not configured. Signature verification failed.")
+        return False
     
     try:
         expected = hmac.new(
@@ -69,6 +68,7 @@ async def verify_webhook(request: Request) -> bool:
     
     Raises HTTPException if invalid.
     """
+    # 1. Immediate bypass for development
     if settings.DEBUG:
         return True
     
@@ -76,7 +76,8 @@ async def verify_webhook(request: Request) -> bool:
     body = await request.body()
     
     if not verify_infobip_signature(body, signature):
-        logger.warning(f"Invalid signature from {request.client.host if request.client else 'unknown'}")
+        client_host = request.client.host if request.client else 'unknown'
+        logger.warning(f"Invalid signature from {client_host}")
         raise HTTPException(status_code=401, detail="Invalid signature")
     
     return True

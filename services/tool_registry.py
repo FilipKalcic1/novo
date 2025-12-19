@@ -22,6 +22,8 @@ from openai import AsyncAzureOpenAI
 from config import get_settings
 from services.schema_validator import SchemaValidator
 
+
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -49,6 +51,31 @@ class ToolRegistry:
         "createdby", "modifiedby"
     }
     
+    STATIC_DEFAULTS = {
+        "other": {
+            "Source": "Bot",
+            "Status": 1,
+            "Active": True
+        },
+        "case": {
+            "AssigneeType": 1
+        },
+        "calendar": {
+            "AssigneeType": 1
+        },
+        "vehicle": {
+            "AcquiringType": 1
+        },
+        "people": {
+            "Active": True,
+            "PersonTypeId": 1
+        }
+    }
+
+
+    ## ovo treba popraviti  !!! 
+
+
     def __init__(self, redis_client=None):
         """
         Initialize tool registry.
@@ -80,7 +107,7 @@ class ToolRegistry:
         """
         Load tools from Swagger spec.
         
-        Args:
+        Args: 
             source: URL to swagger.json
             
         Returns:
@@ -116,16 +143,22 @@ class ToolRegistry:
                 return False
     
     async def _fetch_swagger(self, url: str) -> Optional[Dict]:
-        """Fetch swagger spec."""
+
+        """
+        Asinkrono dohvaća JSON s URL-a.
+        MORA imati 'async' ispred 'def'.
+
+        """
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.get(url)
-                if response.status_code == 200:
-                    return response.json()
-                logger.error(f"Swagger fetch: {response.status_code}")
-                return None
+            async with httpx.AsyncClient(verify=False) as client: 
+                resp = await client.get(url, timeout=30)
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    logger.warning(f"Swagger fetch failed with status {resp.status_code}")
+                    return None
         except Exception as e:
-            logger.error(f"Swagger fetch error: {e}")
+            logger.error(f"HTTP error fetching swagger: {e}")
             return None
     
     def _extract_service(self, url: str) -> str:
@@ -136,33 +169,91 @@ class ToolRegistry:
         return "unknown"
     
     async def _parse_spec(self, spec: Dict, service: str) -> None:
-        """Parse OpenAPI spec."""
+        """
+        Parsira OpenAPI specifikaciju, generira alate i veže na njih Static Defaults.
+        Robustnost: Handla greške po operaciji (ne ruši cijeli load ako jedna fali).
+        """
         paths = spec.get("paths", {})
-        base_path = self._get_base_path(spec, service)
-        
+        # Pretpostavljamo da _get_base_path rješava '/automation' prefix
+        base_path = self._get_base_path(spec, service) 
+
+        # Brojači za logiranje
+        total_ops = 0
+        loaded_ops = 0
+
         for path, methods in paths.items():
             for method, operation in methods.items():
                 if method.lower() not in ["get", "post", "put", "patch", "delete"]:
                     continue
                 
-                operation_id = self._generate_operation_id(path, method, operation)
-                
-                if self._is_blacklisted(operation_id, path):
-                    continue
-                
-                full_path = f"{base_path}{path}"
-                
-                tool = self._create_tool(
-                    operation_id, service, full_path,
-                    method.upper(), operation, spec
-                )
-                
-                if tool:
-                    self.tools[operation_id] = tool
-                    
-                    openai_func = self._create_openai_function(tool)
-                    if openai_func:
-                        self.openai_functions[operation_id] = openai_func
+                total_ops += 1
+
+                try:
+                    # 1. Generiranje ID-a (ključno za povezivanje)
+                    operation_id = self._generate_operation_id(path, method, operation)
+
+                    # 2. Blacklist provjera (preskačemo nepotrebno)
+                    if self._is_blacklisted(operation_id, path):
+                        continue
+
+                    # 3. Konstrukcija punog URL-a
+                    # Čišćenje duplih slasheva (npr. /automation//AddCase -> /automation/AddCase)
+                    full_path = f"{base_path}{path}".replace("//", "/")
+
+                    # 4. === CORE LOGIC: STATIC DEFAULTS ===
+                    # Ovdje "lijepimo" konfiguraciju koju smo generirali (JSON) na alat
+                    tool_defaults = self._resolve_static_defaults(operation_id, path)
+
+                    # 5. Kreiranje internog Tool objekta
+                    tool = self._create_tool(
+                        operation_id=operation_id,
+                        service=service,
+                        path=full_path,
+                        method=method.upper(),
+                        operation=operation,
+                        spec=spec
+                    )
+
+                    if tool:
+                        self.tools[operation_id] = tool
+                        
+                        # 6. Kreiranje OpenAI funkcije (ono što LLM vidi)
+                        openai_func = self._create_openai_function(tool)
+                        if openai_func:
+                            self.openai_functions[operation_id] = openai_func
+                            loaded_ops += 1
+
+                except Exception as e:
+                    # Robustnost: Ako jedna operacija pukne, logiramo i nastavljamo dalje
+                    logger.error(f"Failed to parse operation {method} {path}: {e}")
+
+        logger.info(f"Service '{service}' loaded: {loaded_ops}/{total_ops} tools ready.")
+
+    def _resolve_static_defaults(self, operation_id: str, path: str) -> Dict[str, Any]:
+        """
+        Pomoćna metoda koja spaja GLOBALNA i SPECIFIČNA pravila.
+        """
+        defaults = {}
+        
+        # 1. Primijeni GLOBALNA pravila (baza)
+        # Npr. Source='Bot', Active=True
+        if "global" in self.STATIC_DEFAULTS:
+            defaults.update(self.STATIC_DEFAULTS["global"])
+
+        # 2. Primijeni SPECIFIČNA pravila (Override)
+        # Traži ključne riječi (npr. 'calendar') u ID-u ili Pathu
+        op_id_lower = operation_id.lower()
+        path_lower = path.lower()
+
+        for group_key, group_defaults in self.STATIC_DEFAULTS.items():
+            if group_key == "global": 
+                continue # Već riješeno
+            
+            # Ako je ključna riječ (npr. 'vehicle') pronađena u imenu alata
+            if group_key in op_id_lower or group_key in path_lower:
+                defaults.update(group_defaults)
+        
+        return defaults
     
     def _get_base_path(self, spec: Dict, service: str) -> str:
         """Get base path from spec."""
@@ -192,6 +283,10 @@ class ToolRegistry:
         combined = f"{operation_id.lower()} {path.lower()}"
         return any(p in combined for p in self.BLACKLIST_PATTERNS)
     
+
+
+    #The construction of full_desc with f"{summary}. {description}".strip(". ") may produce odd results if either is empty. Consider a more robust join that avoids leading/trailing punctuation.
+
     def _create_tool(
         self,
         operation_id: str,
@@ -254,10 +349,26 @@ class ToolRegistry:
                 if param_info.get("required"):
                     required.append(param_name)
         
-        # Build embedding text
+
         embedding_text = self._build_embedding_text(
             operation_id, service, path, method, full_desc, parameters
         )
+        
+        # Napredno skraćivanje teksta
+        MAX_LEN = 1500
+        if len(embedding_text) > MAX_LEN:
+            truncated = embedding_text[:MAX_LEN]
+            
+            last_dot = truncated.rfind(". ")
+            
+            if last_dot != -1 and last_dot > (MAX_LEN - 100):
+                embedding_text = truncated[:last_dot + 1]
+            else:
+                last_space = truncated.rfind(" ")
+                if last_space != -1:
+                    embedding_text = truncated[:last_space]
+                else:
+                    embedding_text = truncated
         
         return {
             "operationId": operation_id,
@@ -268,9 +379,10 @@ class ToolRegistry:
             "parameters": parameters,
             "required": required,
             "auto_inject": auto_inject,
-            "embedding_text": embedding_text[:1500],
+            "embedding_text": embedding_text,
             "tags": operation.get("tags", [])
-        }
+        }  
+        
     
     def _extract_body_params(self, request_body: Dict, spec: Dict) -> Dict[str, Any]:
         """Extract parameters from request body."""
@@ -344,6 +456,8 @@ class ToolRegistry:
         
         return ". ".join(parts)
     
+
+    ### ovo je loše 
     def _generate_hints(self, operation_id: str, path: str, method: str) -> List[str]:
         """Generate semantic hints."""
         hints = []
@@ -451,6 +565,7 @@ class ToolRegistry:
         top_k: int = 5,
         threshold: float = None
     ) -> List[Dict]:
+
         """
         Find relevant tools via semantic search.
         
@@ -462,6 +577,7 @@ class ToolRegistry:
         Returns:
             List of OpenAI function definitions
         """
+
         if not self.is_ready:
             logger.warning("Registry not ready")
             return []
@@ -543,32 +659,52 @@ class ToolRegistry:
     
     # === CACHING ===
     
-    async def _load_cache(self) -> None:
-        """Load cache from file."""
-        if not CACHE_FILE.exists():
-            return
-        
-        try:
-            with open(CACHE_FILE, "r") as f:
-                data = json.load(f)
-            
-            self.embeddings = data.get("embeddings", {})
-            logger.info(f"Loaded {len(self.embeddings)} embeddings from cache")
-        except Exception as e:
-            logger.warning(f"Cache load failed: {e}")
+    async def load_swagger(self, source: str) -> bool:
+        """Učitava Swagger s URL-a ili iz datoteke."""
+        async with self._load_lock:
+            try:
+                logger.info(f"Loading swagger: {source}")
+                
+                # OVDJE JE BIO PROBLEM:
+                # _fetch_swagger mora biti pozvan s 'await' i mora biti 'async def'
+                spec = await self._fetch_swagger(source)
+                
+                if not spec:
+                    logger.warning(f"Empty spec received for {source}")
+                    return False
+                
+                service = self._extract_service(source)
+                await self._parse_spec(spec, service)
+                
+                self.is_ready = True
+                return True
+            except Exception as e:
+                # Ovo je uhvatilo tvoju grešku. Sada će ispisati točan uzrok.
+                logger.error(f"Swagger fetch error: {e}")
+                logger.error(f"Failed to fetch: {source}")
+                return False
     
     async def _save_cache(self) -> None:
-        """Save cache to file."""
-        try:
-            data = {
-                "version": "10.0",
-                "timestamp": datetime.utcnow().isoformat(),
-                "embeddings": self.embeddings
-            }
-            
-            with open(CACHE_FILE, "w") as f:
-                json.dump(data, f)
-            
-            logger.debug(f"Saved {len(self.embeddings)} embeddings")
-        except Exception as e:
-            logger.warning(f"Cache save failed: {e}")
+            """Save cache to file (non-blocking thread)."""
+            try:
+                data = {
+                    "version": "10.0",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "embeddings": self.embeddings
+                }
+                
+                # Pisanje u dretvi
+                await asyncio.to_thread(self._write_json_file_sync, CACHE_FILE, data)
+                
+                logger.debug(f"Saved {len(self.embeddings)} embeddings")
+            except Exception as e:
+                logger.warning(f"Cache save failed: {e}")
+
+
+    def _read_json_file_sync(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _write_json_file_sync(self, path, data):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)

@@ -17,27 +17,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger("configuration")
 
 class Settings(BaseSettings):
-    """
-    Application settings loaded from environment variables.
     
-    Kako ovo radi:
-    Pydantic automatski čita varijable iz OS Environmenta koje odgovaraju nazivima polja.
-    Npr. polje MOBILITY_API_URL će automatski povući vrijednost os.getenv('MOBILITY_API_URL').
-    
-    AKO NEMA DEFAULT VRIJEDNOSTI: Pydantic baca grešku ako varijabla fali u envu.
-    """
-    
+    VERIFY_WHATSAPP_SIGNATURE: bool = False  # ✅ Ovo je ispravno
     # =========================================================================
     # APPLICATION
     # =========================================================================
+
     APP_ENV: str = Field(default="development")
     APP_NAME: str = Field(default="MobilityOne Bot")
     APP_VERSION: str = Field(default="11.0.0")
-    DEBUG: bool = Field(default=False)
     
     # =========================================================================
     # DATABASE (Obavezno ako nema defaulta, ali ovdje često stavljamo default za local)
     # =========================================================================
+
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://appuser:password@localhost:5432/mobility_db",
         description="PostgreSQL connection string"
@@ -150,6 +143,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
+
+    @property
+    def DEBUG(self) -> bool:
+        return self.APP_ENV == "development"
 
     # =========================================================================
     # VALIDATORS

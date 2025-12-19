@@ -49,25 +49,19 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    
+    # Učitaj sve iz .env datoteke (Best Practice)
+    env_file:
+      - .env
+    
+    # Eksplicitni overrideovi (ako su potrebni za Docker mrežu)
     environment:
       - APP_ENV=${APP_ENV:-development}
       - DEBUG=${DEBUG:-true}
+      # Koristimo ime servisa 'postgres' i 'redis'
       - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
       - REDIS_URL=redis://redis:6379/0
-      - MOBILITY_API_URL=${MOBILITY_API_URL}
-      - MOBILITY_AUTH_URL=${MOBILITY_AUTH_URL}
-      - MOBILITY_CLIENT_ID=${MOBILITY_CLIENT_ID}
-      - MOBILITY_CLIENT_SECRET=${MOBILITY_CLIENT_SECRET}
-      - MOBILITY_TENANT_ID=${MOBILITY_TENANT_ID}
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
-      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-08-01-preview}
-      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o-mini}
-      - AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-ada-002}
-      - INFOBIP_API_KEY=${INFOBIP_API_KEY}
-      - INFOBIP_BASE_URL=${INFOBIP_BASE_URL:-api.infobip.com}
-      - INFOBIP_SECRET_KEY=${INFOBIP_SECRET_KEY}
-      - INFOBIP_SENDER_NUMBER=${INFOBIP_SENDER_NUMBER}
+    
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,27 +84,22 @@ services:
     container_name: fleet_worker1
     restart: unless-stopped
     command: python worker.py
+    
+    # Učitaj sve iz .env datoteke
+    env_file:
+      - .env
+      
     environment:
       - APP_ENV=${APP_ENV:-development}
       - DEBUG=${DEBUG:-true}
       - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
       - REDIS_URL=redis://redis:6379/0
-      - MOBILITY_API_URL=${MOBILITY_API_URL}
-      - MOBILITY_AUTH_URL=${MOBILITY_AUTH_URL}
-      - MOBILITY_CLIENT_ID=${MOBILITY_CLIENT_ID}
-      - MOBILITY_CLIENT_SECRET=${MOBILITY_CLIENT_SECRET}
-      - MOBILITY_TENANT_ID=${MOBILITY_TENANT_ID}
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
-      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-08-01-preview}
-      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o-mini}
-      - AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-ada-002}
-      - INFOBIP_API_KEY=${INFOBIP_API_KEY}
-      - INFOBIP_BASE_URL=${INFOBIP_BASE_URL:-api.infobip.com}
-      - INFOBIP_SENDER_NUMBER=${INFOBIP_SENDER_NUMBER}
+      
     depends_on:
       api:
         condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - fleet_net
 

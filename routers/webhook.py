@@ -1,76 +1,145 @@
-import uuid
+"""
+Webhook Router
+Version: 11.0 (Complete & Robust)
+"""
 import structlog
-import json
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, BackgroundTasks, status
 from services.queue_service import QueueService
-from security import verify_webhook
-from fastapi_limiter.depends import RateLimiter
+from security import verify_webhook, sanitize_phone
+from schemas import InfobipWebhookPayload
 
 router = APIRouter()
 logger = structlog.get_logger("webhook")
 
-# Dependency Injection
-def get_queue(request: Request) -> QueueService: 
+def get_queue(request: Request) -> QueueService:
+    # Dohvaća queue servis inicijaliziran u main.py
     return request.app.state.queue
 
-@router.post(
-    "/whatsapp", 
-    dependencies=[
-        Depends(verify_webhook),  # fixaj ovo 
-        Depends(RateLimiter(times=100, minutes=1)) 
-    ]
-)
-async def whatsapp_webhook(request: Request, queue: QueueService = Depends(get_queue)):
-    try:
-        payload = await request.json()
-        logger.info("🔥 RAW INFOBIP PAYLOAD 🔥", payload=payload) 
-    except Exception as e:
-        logger.error("Failed to parse JSON", error=str(e))
-        return {"status": "error", "reason": "invalid_json"}
 
-    results = payload.get("results", [])
-    if not results:
-        logger.warning("Ignoriram payload (prazna 'results' lista)", payload=payload)
+@router.post(
+
+
+    "/whatsapp",
+
+
+    status_code=status.HTTP_200_OK,
+
+
+    dependencies=[Depends(verify_webhook)] # Propušta auth ako je DEBUG=True
+
+
+)
+
+
+async def whatsapp_webhook(
+
+
+    payload: InfobipWebhookPayload,
+
+
+    background_tasks: BackgroundTasks,
+
+
+    queue: QueueService = Depends(get_queue)
+
+
+):
+
+
+    """
+
+
+    Prima poruke od Infobipa, validira ih putem Pydantica i asinkrono šalje u Redis.
+
+
+    Vraća 200 OK odmah (ispod 50ms).
+
+
+    """
+
+
+    if not payload.results:
+
+
+        logger.warning("Primljen prazan webhook payload")
+
+
         return {"status": "ignored", "reason": "empty_results"}
 
-    msg = results[0]
-    
-    sender = msg.get("sender") or msg.get("from")
-    message_id = msg.get("messageId") or str(uuid.uuid4())
 
-    if not sender:
-        logger.warning("Ignoriram poruku (fali pošiljatelj)", msg=msg)
-        return {"status": "ignored", "reason": "missing_sender"}
 
-    text = ""
-    content_type = "UNKNOWN"
 
-    # Handle modern list-based content
-    if "content" in msg and isinstance(msg["content"], list) and msg["content"]:
-        first_content = msg["content"][0]
-        content_type = first_content.get("type", "UNKNOWN")
-        if content_type == "TEXT":
-            text = first_content.get("text", "").strip()
-    # Fallback for older, simple text format
-    elif "text" in msg:
-        text = msg.get("text", "").strip()
-        content_type = "TEXT" # Assume text if 'text' field is present
-    
-    if not text:
-        logger.warning(
-            "Ignoriram poruku (prazan tekst ili nepodržan tip)", 
-            sender=sender, 
-            content_type=content_type,
-            msg=msg
+
+    for msg in payload.results:
+
+
+        # Pydantic je već obradio ekstrakciju teksta u msg.extracted_text
+
+
+        if not msg.extracted_text:
+
+
+            logger.debug("Preskačem poruku bez teksta", id=msg.message_id)
+
+
+            continue
+
+
+
+
+
+        sender = sanitize_phone(msg.sender)
+
+
+        
+
+
+        logger.info("📩 Poruka primljena", 
+
+
+                    sender=sender, 
+
+
+                    message_id=msg.message_id,
+
+
+                    text_preview=msg.extracted_text[:30])
+
+
+
+
+
+        # BackgroundTask osigurava da spora AI obrada ne blokira odgovor Infobipu
+
+
+        background_tasks.add_task(
+
+
+            queue.enqueue_inbound,
+
+
+            sender=sender,
+
+
+            text=msg.extracted_text,
+
+
+            message_id=msg.message_id
+
+
         )
-        return {"status": "ignored", "reason": f"empty_text_or_unsupported_type:{content_type}"}
 
-    logger.info("✅ Poruka uspješno pročitana", sender=sender, text=text)
-    
-    stream_id = await queue.enqueue_inbound(
-        sender=sender, 
-        text=text, 
-        message_id=message_id
-    )
-    
-    return {"status": "queued", "stream_id": stream_id}
+
+
+
+
+    return {
+
+
+        "status": "queued", 
+
+
+        "count": len(payload.results)
+
+
+    }

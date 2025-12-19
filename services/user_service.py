@@ -10,10 +10,9 @@ import logging
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
 
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 from models import UserMapping
 from config import get_settings
 
@@ -49,10 +48,10 @@ class UserService:
         self.gateway = gateway
         self.cache = cache
         self.tenant_id = settings.tenant_id
-    
-    async def get_active_identity(self, phone: str) -> Optional[UserMapping]:
+
+    async def get_active_identity(self, phone: str) -> Optional['UserMapping']:
         """
-        Get user from database.
+        Get user from database, trying multiple phone formats.
         
         Args:
             phone: Phone number
@@ -61,15 +60,50 @@ class UserService:
             UserMapping or None
         """
         try:
+            # Generate possible phone number variations
+            variations = set([phone])
+            
+            digits_only = "".join(filter(str.isdigit, phone))
+            if digits_only != phone:
+                variations.add(digits_only)
+
+            # From +385... to 385...
+            if phone.startswith("+"):
+                variations.add(phone[1:])
+
+            # From 385... to +385...
+            if phone.startswith("385"):
+                variations.add("+" + phone)
+            
+            # From 385... to 0...
+            if digits_only.startswith("385") and len(digits_only) > 3:
+                variations.add("0" + digits_only[3:])
+            
+            # From 0... to 385...
+            if digits_only.startswith("0") and len(digits_only) > 1:
+                variations.add("385" + digits_only[1:])
+
+            logger.debug(f"Attempting user lookup with phone variations: {variations}")
+
             stmt = select(UserMapping).where(
-                UserMapping.phone_number == phone,
+                UserMapping.phone_number.in_(list(variations)),
                 UserMapping.is_active == True
-            )
+            ).limit(1)
+
             result = await self.db.execute(stmt)
-            return result.scalars().first()
+            user = result.scalars().first()
+            
+            if user:
+                logger.info(f"Found active user '{user.display_name}' for phone '{phone}' using variation '{user.phone_number}'")
+            else:
+                logger.warning(f"No active user found for phone '{phone}' with variations {variations}")
+                
+            return user
         except Exception as e:
-            logger.error(f"DB lookup failed: {e}")
+            logger.error(f"DB lookup failed for phone '{phone}': {e}")
             return None
+    
+    # ... (rest of class)
     
     async def try_auto_onboard(self, phone: str) -> Optional[Tuple[str, str]]:
         """

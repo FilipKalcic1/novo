@@ -1,16 +1,15 @@
 """
 Pydantic Schemas
-Version: 10.0
+Version: 11.0 (Universal Agent Edition)
 
-Data validation schemas.
+Data validation schemas including Flow and Webhook structures.
 NO DEPENDENCIES on services.
 """
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # === ENUMS ===
@@ -39,18 +38,45 @@ class FlowState(str, Enum):
     ERROR = "error"
 
 
-# === WEBHOOK SCHEMAS ===
+# === INFOBIP WEBHOOK SCHEMAS ===
+
+class InfobipMessage(BaseModel):
+    """Model za Infobip poruku s automatskim prepoznavanjem formata teksta."""
+    sender: str
+    message_id: str = Field(..., alias="messageId")
+    message_count: int = Field(..., alias="messageCount")
+    text: Optional[str] = None
+    content: Optional[List[Dict[str, Any]]] = None
+    extracted_text: str = ""
+
+    @model_validator(mode='after')
+    def extract_message_text(self) -> 'InfobipMessage':
+        """Izvlači tekst bez obzira šalje li Infobip 'text' ili 'content' listu."""
+        text = ""
+        if self.content and isinstance(self.content, list) and len(self.content) > 0:
+            first = self.content[0]
+            if first.get("type") == "TEXT":
+                text = first.get("text", "")
+        elif self.text:
+            text = self.text
+        
+        self.extracted_text = text.strip()
+        return self
+
+
+class InfobipWebhookPayload(BaseModel):
+    """Payload koji FastAPI automatski validira."""
+    results: List[InfobipMessage]
+
 
 class WebhookResponse(BaseModel):
-    """Response to webhook."""
     status: str = "ok"
     message_id: Optional[str] = None
 
 
-# === USER SCHEMAS ===
+# === USER & CONTEXT SCHEMAS ===
 
 class UserData(BaseModel):
-    """User information."""
     person_id: str = ""
     phone: str = ""
     display_name: str = "Korisnik"
@@ -58,7 +84,6 @@ class UserData(BaseModel):
 
 
 class VehicleData(BaseModel):
-    """Vehicle information."""
     id: str = "UNKNOWN"
     plate: str = "UNKNOWN"
     name: str = "Nepoznato"
@@ -67,15 +92,13 @@ class VehicleData(BaseModel):
 
 
 class OperationalContext(BaseModel):
-    """User operational context."""
     user: UserData = Field(default_factory=UserData)
     vehicle: VehicleData = Field(default_factory=VehicleData)
 
 
-# === API RESPONSE ===
+# === API & TOOL SCHEMAS ===
 
 class APIResponseSchema(BaseModel):
-    """Standardized API response."""
     success: bool
     status_code: int
     data: Optional[Any] = None
@@ -83,10 +106,7 @@ class APIResponseSchema(BaseModel):
     error_code: Optional[str] = None
 
 
-# === TOOL SCHEMAS ===
-
 class ToolParameter(BaseModel):
-    """Tool parameter."""
     name: str
     type: str
     description: str = ""
@@ -95,7 +115,6 @@ class ToolParameter(BaseModel):
 
 
 class ToolDefinition(BaseModel):
-    """Tool definition."""
     operation_id: str
     service: str
     path: str
@@ -103,26 +122,13 @@ class ToolDefinition(BaseModel):
     description: str
     parameters: List[ToolParameter] = []
     auto_inject: List[str] = []
+    static_defaults: Dict[str, Any] = {} # Ključno za Zero Hardcoding
 
 
-class ToolExecutionRequest(BaseModel):
-    """Tool execution request."""
-    tool_name: str
-    parameters: Dict[str, Any] = {}
-
-
-class ToolExecutionResponse(BaseModel):
-    """Tool execution response."""
-    success: bool
-    data: Optional[Any] = None
-    error: Optional[str] = None
-    error_code: Optional[str] = None
-
-
-# === FLOW SCHEMAS ===
+# === FLOW SCHEMAS (Vraćeno i integrirano) ===
 
 class FlowContext(BaseModel):
-    """Flow context."""
+    """Spremnik za memoriju Agenta tijekom ulančavanja alata."""
     user_id: str
     person_id: str
     tenant_id: str
@@ -134,7 +140,7 @@ class FlowContext(BaseModel):
 
 
 class FlowResult(BaseModel):
-    """Flow processing result."""
+    """Rezultat jedne iteracije Agenta."""
     response: str
     state: FlowState = FlowState.IDLE
     is_complete: bool = False

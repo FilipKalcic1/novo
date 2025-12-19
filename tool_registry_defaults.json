@@ -1,0 +1,20 @@
+{
+    "other": {
+        "Source": "Bot",
+        "Status": 1,
+        "Active": true
+    },
+    "case": {
+        "AssigneeType": 1
+    },
+    "calendar": {
+        "AssigneeType": 1
+    },
+    "vehicle": {
+        "AcquiringType": 1
+    },
+    "people": {
+        "Active": true,
+        "PersonTypeId": 1
+    }
+}
