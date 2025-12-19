@@ -81,4 +81,4 @@ docker-compose.override.yml
 
 # --- 7. LOGS ---
 *.log
-logs/
+log/
