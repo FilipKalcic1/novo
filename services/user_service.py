@@ -104,51 +104,56 @@ class UserService:
             return None
     
     # ... (rest of class)
+        
+    async def try_auto_onboard(self, phone: str) -> Optional[Tuple[str, str]]:       
     
-    async def try_auto_onboard(self, phone: str) -> Optional[Tuple[str, str]]:
-        """Pokušaj onboardanja koristeći isključivo 'Phone' polje s varijacijama."""
         if not self.gateway:
             return None
         
         try:
-            # Čistimo broj na dva načina (međunarodni i lokalni)
-            # 1. 38595... (bez plusa)
-            clean_intl = phone.replace("+", "").strip().replace(" ", "")
-            # 2. 095... (ako je slučajno tako spremljeno u bazi)
-            clean_local = clean_intl
-            if clean_intl.startswith("385"):
-                clean_local = "0" + clean_intl[3:]
-
-            variations = [clean_intl, clean_local]
+            # Generate phone variations to maximize match chance
+            digits_only = "".join(c for c in phone if c.isdigit())
+            variations = {phone, digits_only}
+            if phone.startswith("+"):
+                variations.add(phone[1:])
+            if phone.startswith("385"):
+                variations.add("+" + phone)
+            if digits_only.startswith("385"):
+                variations.add("0" + digits_only[3:])
+            if digits_only.startswith("0"):
+                variations.add("385" + digits_only[1:])
+            
             from services.api_gateway import HttpMethod
 
-            for phone_var in variations:
-                logger.info(f"Tražim korisnika po broju: {phone_var}")
-                
-                # Koristimo točan format koji je potvrdio curl i log
-                filter_str = f"Phone%28=%29{phone_var}"
-                
-                response = await self.gateway.execute(
-                    method=HttpMethod.GET,
-                    path="/tenantmgt/Persons",
-                    params={"Filter": filter_str}
-                )
-
-                if response.success:
-                    data = response.data
-                    items = data if isinstance(data, list) else data.get("Items", [])
+            # Search both "Phone" and "Mobile" fields
+            for field in ["Phone", "Mobile"]:
+                for phone_var in variations:
+                    logger.info(f"Tražim korisnika po polju '{field}' s brojem: {phone_var}")
                     
-                    if items:
-                        person = items[0]
-                        person_id = person.get("Id")
-                        display_name = person.get("DisplayName", "Korisnik")
+                    filter_str = f"{field}(=){phone_var}"
+                    
+                    response = await self.gateway.execute(
+                        method=HttpMethod.GET,
+                        path="/tenantmgt/Persons",
+                        params={"Filter": filter_str}
+                    )
+
+                    if response.success:
+                        data = response.data
+                        # BUGFIX: API returns 'Data', not 'Items'
+                        items = data if isinstance(data, list) else data.get("Data", [])
                         
-                        logger.info(f"✅ Korisnik pronađen: {display_name}")
-                        
-                        # Spremanje u bazu
-                        vehicle_info = await self._get_vehicle_info(person_id)
-                        await self._upsert_mapping(phone, person_id, display_name)
-                        return (display_name, vehicle_info)
+                        if items:
+                            person = items[0]
+                            person_id = person.get("Id")
+                            display_name = person.get("DisplayName", "Korisnik")
+                            
+                            logger.info(f"✅ Korisnik pronađen preko polja '{field}': {display_name}")
+                            
+                            # Spremanje u bazu
+                            await self._upsert_mapping(phone, person_id, display_name)
+                            vehicle_info = await self._get_vehicle_info(person_id)
+                            return (display_name, vehicle_info)
 
             logger.warning(f"❌ Korisnik nije pronađen na API-ju niti s jednom varijacijom: {variations}")
             return None
@@ -210,7 +215,10 @@ class UserService:
         except Exception:
             return "Nepoznato"
     
-    async def _save_mapping(self, phone: str, person_id: str, name: str) -> None:
+
+    #self, phone: str, person_id: str, name: str
+    # Promijeni ime u _upsert_mapping (da odgovara pozivu):
+    async def _upsert_mapping(self, phone: str, person_id: str, name: str) -> None:
         """Save user mapping to database."""
         try:
             stmt = pg_insert(UserMapping).values(

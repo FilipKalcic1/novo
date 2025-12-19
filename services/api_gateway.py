@@ -220,7 +220,7 @@ class APIGateway:
             raise ValueError(f"Unsupported method: {method}")
     
     def _build_url(self, path: str, params: Optional[Dict[str, Any]]) -> str:
-        """Build full URL with query parameters, preserving OData filters."""
+        """Gradi URL i osigurava da se OData Filter ne pokvari enkodiranjem."""
         if not path.startswith("/"):
             path = "/" + path
         
@@ -232,14 +232,12 @@ class APIGateway:
                 parts = []
                 for k, v in clean.items():
                     if k == "Filter":
-                        # Identično starom kodu: Filter se ne smije agresivno enkodirati.
-                        # Šaljemo ga 'sirovog' kako bi OData filteri radili.
-                        parts.append(f"{k}={v}")
+                        # KLJUČNO: Ne enkodiramo '=' u '%3D' jer API to ne priznaje
+                        # safe='=' ostavlja znak jednakosti 'sirovim'
+                        parts.append(f"{k}={quote(str(v), safe='=')}")
                     else:
                         parts.append(f"{k}={quote(str(v), safe='')}")
-                
                 url = f"{url}?{'&'.join(parts)}"
-        
         return url
     
     def _parse_response(self, response: httpx.Response) -> APIResponse:
