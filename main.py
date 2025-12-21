@@ -107,15 +107,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         
         # Tool Registry
         app.state.registry = ToolRegistry(redis_client=app.state.redis)
-        
-        # Load swagger specs
-        for source in settings.swagger_sources:
-            try:
-                await app.state.registry.load_swagger(source)
-                logger.info(f"✅ Loaded: {source.split('/')[-3]}")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to load {source}: {e}")
-        
+
+        # CRITICAL FIX: Initialize with ALL sources at once (not one by one!)
+        # This enables proper caching and avoids 3x embedding generation
+        success = await app.state.registry.initialize(settings.swagger_sources)
+
+        if not success:
+            logger.error("❌ Tool Registry initialization failed")
+            raise RuntimeError("Tool Registry initialization failed")
+
         logger.info(f"✅ Tool Registry: {len(app.state.registry.tools)} tools")
         
         # Queue Service

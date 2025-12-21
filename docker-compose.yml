@@ -4,7 +4,7 @@ services:
   # === PostgreSQL ===
   postgres:
     image: postgres:15-alpine
-    container_name: fleet_postgres1
+    container_name: fleet_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: appuser
@@ -27,7 +27,7 @@ services:
   # === Redis ===
   redis:
     image: redis:7-alpine
-    container_name: fleet_redis1
+    container_name: fleet_redis
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
@@ -45,15 +45,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fleet_api1
+    container_name: fleet_api
     restart: unless-stopped
     ports:
       - "8000:8000"
-    
+
     # Učitaj sve iz .env datoteke (Best Practice)
     env_file:
       - .env
-    
+
     # Eksplicitni overrideovi (ako su potrebni za Docker mrežu)
     environment:
       - APP_ENV=${APP_ENV:-development}
@@ -61,7 +61,11 @@ services:
       # Koristimo ime servisa 'postgres' i 'redis'
       - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
       - REDIS_URL=redis://redis:6379/0
-    
+
+    # CRITICAL: Persist .cache directory with named volume (Docker-managed permissions)
+    volumes:
+      - cache_data:/app/.cache
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,8 +75,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 60s
+      retries: 10  # Increased: First startup takes ~3min (embedding generation)
+      start_period: 240s  # 4 minutes grace period for cache generation
     networks:
       - fleet_net
 
@@ -81,20 +85,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fleet_worker1
+    container_name: fleet_worker
     restart: unless-stopped
     command: python worker.py
-    
+
     # Učitaj sve iz .env datoteke
     env_file:
       - .env
-      
+
     environment:
       - APP_ENV=${APP_ENV:-development}
       - DEBUG=${DEBUG:-true}
       - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
       - REDIS_URL=redis://redis:6379/0
-      
+
+    # CRITICAL: Persist .cache directory with named volume (shared with API)
+    volumes:
+      - cache_data:/app/.cache
+
     depends_on:
       api:
         condition: service_healthy
@@ -106,6 +114,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  cache_data:  # Shared cache volume (Docker-managed permissions)
 
 networks:
   fleet_net:
