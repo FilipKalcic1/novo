@@ -34,6 +34,11 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
+
+# Reduce noise from verbose libraries (CRITICAL for production readability)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,15 +110,21 @@ class Worker:
         self.rate_limit = settings.RATE_LIMIT_PER_MINUTE
         self.rate_window = settings.RATE_LIMIT_WINDOW
         
-        # Singleton services
+        # Singleton services (initialized once at startup)
         self._gateway = None
         self._registry = None
-        
+        self._message_engine = None  # CRITICAL: Singleton MessageEngine
+
+        # Per-request services (thread-safe)
+        self._queue = None
+        self._cache = None
+        self._context = None
+
         # Stats
         self._messages_processed = 0
         self._messages_failed = 0
         self._start_time = None
-        
+
         # Semaphore for concurrency control
         self._semaphore = asyncio.Semaphore(self.MAX_CONCURRENT)
     
@@ -226,27 +237,66 @@ class Worker:
         raise RuntimeError("Could not connect to database")
     
     async def _init_services(self):
-        """Initialize singleton services."""
-        logger.info("🔧 Initializing services...")
-        
+        """
+        Initialize singleton services.
+
+        CRITICAL: Services are initialized ONCE at startup, not per-request.
+        This ensures:
+        - Cache persistence across messages
+        - Reduced memory overhead
+        - Consistent state
+        """
+        logger.info("🔧 Initializing singleton services...")
+
         from services.api_gateway import APIGateway
         from services.tool_registry import ToolRegistry
-        
+        from services.queue_service import QueueService
+        from services.cache_service import CacheService
+        from services.context_service import ContextService
+        from services.message_engine import MessageEngine
+        from database import AsyncSessionLocal
+
+        # 1. Initialize core services (shared across all requests)
         self._gateway = APIGateway(redis_client=self.redis)
         self._registry = ToolRegistry(redis_client=self.redis)
-        
-        # Load swagger specs
-        for source in settings.swagger_sources:
-            if self.shutdown.is_shutting_down():
-                raise asyncio.CancelledError()
-            
-            try:
-                await self._registry.load_swagger(source)
-                logger.info(f"✅ Loaded: {source.split('/')[-3]}")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to load {source}: {e}")
-        
-        logger.info(f"✅ Tool Registry: {len(self._registry.tools)} tools")
+
+        # 2. Initialize per-request services (thread-safe via Redis)
+        self._queue = QueueService(self.redis)
+        self._cache = CacheService(self.redis)
+        self._context = ContextService(self.redis)
+
+        # 3. CRITICAL FIX: Use initialize() with ALL sources at once
+        # (Not load_swagger() in loop - that overwrites cache!)
+        swagger_sources = settings.swagger_sources
+        if not swagger_sources:
+            logger.warning("⚠️ No Swagger sources configured")
+        else:
+            logger.info(f"Initializing registry with {len(swagger_sources)} sources...")
+            success = await self._registry.initialize(swagger_sources)
+
+            if success:
+                logger.info(
+                    f"✅ Tool Registry: {len(self._registry.tools)} tools loaded"
+                )
+            else:
+                logger.error("❌ Tool Registry initialization failed")
+                raise RuntimeError("Tool Registry initialization failed")
+
+        # 4. CRITICAL FIX: Initialize MessageEngine ONCE (singleton pattern)
+        # Note: DB session is per-request, so we pass None here
+        # and inject it per-message in _process_message
+        logger.info("🔧 Initializing MessageEngine singleton...")
+        # MessageEngine will get db_session per request, so we create a temp session for init
+        async with AsyncSessionLocal() as temp_db:
+            self._message_engine = MessageEngine(
+                gateway=self._gateway,
+                registry=self._registry,
+                context_service=self._context,
+                queue_service=self._queue,
+                cache_service=self._cache,
+                db_session=temp_db  # Temp session for init only
+            )
+            logger.info("✅ MessageEngine initialized")
     
     async def _create_consumer_group(self):
         """Create Redis consumer group."""
@@ -340,28 +390,30 @@ class Worker:
             logger.info(f"✅ Processed in {elapsed:.2f}s")
     
     async def _process_message(self, sender: str, text: str, message_id: str) -> Optional[str]:
-        """Process message through engine."""
-        from services.queue_service import QueueService
-        from services.cache_service import CacheService
-        from services.context_service import ContextService
-        from services.message_engine import MessageEngine
+        """
+        Process message through MessageEngine singleton.
+
+        CRITICAL FIX: Uses singleton engine with per-request DB session.
+        This ensures:
+        - Shared cache between messages (performance)
+        - Fresh DB session per request (isolation)
+        - Correct transaction boundaries
+        """
         from database import AsyncSessionLocal
-        
+
+        # Create fresh DB session for this request
         async with AsyncSessionLocal() as db:
-            queue = QueueService(self.redis)
-            cache = CacheService(self.redis)
-            context = ContextService(self.redis)
-            
-            engine = MessageEngine(
-                gateway=self._gateway,
-                registry=self._registry,
-                context_service=context,
-                queue_service=queue,
-                cache_service=cache,
-                db_session=db
-            )
-            
-            return await engine.process(sender, text, message_id)
+            # Inject fresh DB session into existing engine
+            # (Services like context, queue, cache are already singleton)
+            self._message_engine.db = db
+
+            try:
+                return await self._message_engine.process(sender, text, message_id)
+            except Exception as e:
+                # Ensure rollback on error
+                await db.rollback()
+                logger.error(f"Message processing error, rolled back transaction: {e}")
+                raise
     
     async def _process_outbound_loop(self):
         """Process outbound messages."""

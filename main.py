@@ -23,6 +23,11 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
+
+# Reduce noise from verbose libraries (CRITICAL for production readability)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 # Import config
@@ -166,7 +171,8 @@ app.add_middleware(
 )
 
 # Include routers
-from routers.webhook import router as webhook_router
+# Simple webhook endpoint that pushes to Redis queue
+from webhook_simple import router as webhook_router
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
 
 if settings.DEBUG:
