@@ -1,487 +1,416 @@
 """
-Tool Executor
-Version: 11.0
+Tool Executor - Production-Ready Execution Engine
+Version: 2.0
 
-Dynamic API execution with validation and auto-injection.
+GATE 1: INVISIBLE INJECTION (Merge) - Auto-inject context params
+GATE 2: TYPE VALIDATION & CASTING - Strict type checking
+GATE 3: CIRCUIT BREAKER - Prevent cascading failures
 
-CRITICAL FIXES:
-1. Auto-injects user_id, tenant_id, person_id
-2. Validates parameters against schema
-3. Provides detailed error feedback for AI
-4. Type coercion for common mismatches
+Features:
+- Domain-agnostic execution
+- Parameter resolution from multiple sources
+- Circuit breaker protection
+- Detailed error feedback for AI
+
+NO business logic.
 """
 
-import re
-import json
 import logging
-from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime
+import time
+from typing import Dict, Any, Optional
 
 from services.api_gateway import APIGateway, HttpMethod, APIResponse
+from services.tool_contracts import (
+    UnifiedToolDefinition,
+    ToolExecutionContext,
+    ToolExecutionResult
+)
+from services.parameter_manager import ParameterManager, ParameterValidationError
+from services.circuit_breaker import CircuitBreaker, CircuitOpenError
+from services.error_parser import ErrorParser
+
 
 logger = logging.getLogger(__name__)
 
 
-class ValidationError(Exception):
-    """Parameter validation error with details for AI feedback."""
-    
-    def __init__(self, message: str, missing: List[str] = None, invalid: Dict[str, str] = None):
-        super().__init__(message)
-        self.missing = missing or []
-        self.invalid = invalid or {}
-    
-    def ai_feedback(self) -> str:
-        """Generate feedback message for AI."""
-        parts = [self.args[0]]
-        
-        if self.missing:
-            parts.append(f"Missing required parameters: {', '.join(self.missing)}")
-        
-        if self.invalid:
-            for param, reason in self.invalid.items():
-                parts.append(f"Invalid '{param}': {reason}")
-        
-        return ". ".join(parts)
-
-
 class ToolExecutor:
     """
-    Executes API tools with validation and auto-injection.
-    
-    Features:
-    - Automatic parameter injection (person_id, tenant_id)
-    - Schema validation before execution
-    - Type coercion (string to int, date parsing)
-    - Detailed error messages for AI feedback
+    Executes tools with full validation and safety gates.
+
+    Pipeline:
+    1. GATE 1: Parameter resolution (context injection)
+    2. GATE 2: Type validation and casting
+    3. GATE 3: Circuit breaker check
+    4. HTTP call via API Gateway
+    5. GATE 5: Error parsing and AI feedback
     """
-    
-    # Parameters to auto-inject from user context
-    AUTO_INJECT_MAP = {
-        "personid": "person_id",
-        "assignedtoid": "person_id",
-        "driverid": "person_id",
-        "tenantid": "tenant_id",
-        "createdby": "person_id",
-        "modifiedby": "person_id",
-        "userid": "person_id",
-    }
-    
-    def __init__(self, gateway: APIGateway, registry):
-        """Initialize executor."""
+
+    def __init__(
+        self,
+        gateway: APIGateway,
+        circuit_breaker: Optional[CircuitBreaker] = None
+    ):
+        """
+        Initialize executor.
+
+        Args:
+            gateway: API Gateway for HTTP calls
+            circuit_breaker: Optional circuit breaker
+        """
         self.gateway = gateway
-        self.registry = registry
-    
+        self.circuit_breaker = circuit_breaker or CircuitBreaker()
+        self.param_manager = ParameterManager()
+
+        logger.info("ToolExecutor initialized (v2.0)")
+
     async def execute(
         self,
-        operation_id: str,
-        parameters: Dict[str, Any],
-        user_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        tool: UnifiedToolDefinition,
+        llm_params: Dict[str, Any],
+        execution_context: ToolExecutionContext
+    ) -> ToolExecutionResult:
         """
-        Execute tool with validation.
-        
+        Execute tool with full safety pipeline.
+
         Args:
-            operation_id: Tool operation ID
-            parameters: Parameters from AI (may be incomplete/wrong)
-            user_context: User context for auto-injection
-            
+            tool: Tool definition
+            llm_params: Parameters from LLM
+            execution_context: Execution context
+
         Returns:
-            Result dict with success/error and AI feedback
+            ToolExecutionResult
         """
-        # 1. Get tool definition
-        tool = self.registry.get_tool(operation_id)
-        if not tool:
-            return self._error_response(
-                f"Tool '{operation_id}' not found",
-                "TOOL_NOT_FOUND",
-                ai_feedback=f"The tool '{operation_id}' does not exist. Check available tools."
-            )
-        
+        start_time = time.time()
+        operation_id = tool.operation_id
+
         logger.info(f"🔧 Executing: {operation_id}")
-        
+
         try:
-            # 2. Auto-inject parameters
-            params = self._auto_inject(parameters.copy(), tool, user_context)
-            
-            # 3. Validate and coerce types
-            params, validation_warnings = self._validate_and_coerce(params, tool)
-            
-            if validation_warnings:
-                logger.warning(f"Validation warnings: {validation_warnings}")
-            
-            # 4. Check required parameters
-            missing = self._check_required(params, tool)
-            if missing:
-                return self._error_response(
-                    f"Missing required parameters: {', '.join(missing)}",
-                    "MISSING_PARAMS",
-                    ai_feedback=f"Please provide values for: {', '.join(missing)}"
-                )
-            
-            # 5. Substitute path parameters
-            path = self._substitute_path(tool["path"], params)
-            
-            # 6. Prepare request
-            method = tool["method"]
-            query_params, body = self._prepare_request(params, tool, method)
-            
-            # 7. Execute API call
-            logger.info(f"📡 API: {method} {path}")
-            
-            response = await self.gateway.execute(
-                method=HttpMethod[method],
-                path=path,
-                params=query_params,
+            # GATE 1 & 2: Parameter resolution and validation
+            resolved_params, warnings = self.param_manager.resolve_parameters(
+                tool=tool,
+                llm_params=llm_params,
+                execution_context=execution_context
+            )
+
+            if warnings:
+                for warning in warnings:
+                    logger.warning(f"⚠️ {warning}")
+
+            # Prepare request components
+            path, query_params, body = self.param_manager.prepare_request(
+                tool=tool,
+                params=resolved_params
+            )
+
+            # Build full URL using STRICT Master Prompt v3.1 formula
+            full_url = self._build_url(tool)
+
+            # VALIDATE: HTTP Method and URL construction
+            self._validate_http_request(
+                method=tool.method,
+                url=full_url,
+                query_params=query_params,
                 body=body,
-                tenant_id=user_context.get("tenant_id")
+                operation_id=operation_id
             )
-            
-            # 8. Format response
-            return self._format_response(response, tool)
-            
-        except ValidationError as e:
-            return self._error_response(
-                str(e),
-                "VALIDATION_ERROR",
-                ai_feedback=e.ai_feedback()
+
+            # Prepare headers
+            headers = self._build_headers(
+                tool=tool,
+                execution_context=execution_context
             )
+
+            # GATE 3: Circuit breaker protection
+            endpoint_key = f"{tool.method} {tool.service_name}{path}"
+
+            response = await self.circuit_breaker.call(
+                endpoint_key=endpoint_key,
+                func=self._make_http_call,
+                method=tool.method,
+                url=full_url,
+                query_params=query_params,
+                body=body,
+                headers=headers,
+                tenant_id=execution_context.user_context.get("tenant_id")
+            )
+
+            # Process response
+            execution_time = int((time.time() - start_time) * 1000)
+
+            if not response.success:
+                # GATE 5: Error parsing
+                ai_feedback = ErrorParser.parse_http_error(
+                    status_code=response.status_code,
+                    response_body=response.data,
+                    operation_id=operation_id
+                )
+
+                return ToolExecutionResult(
+                    success=False,
+                    operation_id=operation_id,
+                    error_code=response.error_code or f"HTTP_{response.status_code}",
+                    error_message=response.error_message or "Unknown error",
+                    ai_feedback=ai_feedback,
+                    http_status=response.status_code,
+                    execution_time_ms=execution_time
+                )
+
+            # Extract output values for chaining
+            output_values = self._extract_output_values(
+                response.data,
+                tool.output_keys
+            )
+
+            return ToolExecutionResult(
+                success=True,
+                operation_id=operation_id,
+                data=response.data,
+                output_values=output_values,
+                http_status=response.status_code,
+                execution_time_ms=execution_time
+            )
+
+        except ParameterValidationError as e:
+            logger.warning(f"Parameter validation failed: {e}")
+
+            ai_feedback = e.to_ai_feedback()
+
+            return ToolExecutionResult(
+                success=False,
+                operation_id=operation_id,
+                error_code="PARAMETER_VALIDATION_ERROR",
+                error_message=str(e),
+                ai_feedback=ai_feedback,
+                execution_time_ms=int((time.time() - start_time) * 1000)
+            )
+
+        except CircuitOpenError as e:
+            logger.warning(f"Circuit open: {e}")
+
+            return ToolExecutionResult(
+                success=False,
+                operation_id=operation_id,
+                error_code="CIRCUIT_OPEN",
+                error_message=str(e),
+                ai_feedback=str(e),  # Already in Croatian
+                execution_time_ms=int((time.time() - start_time) * 1000)
+            )
+
         except Exception as e:
-            logger.error(f"❌ Execution error: {e}", exc_info=True)
-            return self._error_response(
-                str(e),
-                "EXECUTION_ERROR",
-                ai_feedback=f"Execution failed: {e}"
+            logger.error(f"Execution error: {e}", exc_info=True)
+
+            ai_feedback = (
+                f"Neočekivana greška pri izvršavanju '{operation_id}': {str(e)}. "
+                f"Pokušaj ponovno ili koristi alternativni alat."
             )
-    
-    def _auto_inject(
+
+            return ToolExecutionResult(
+                success=False,
+                operation_id=operation_id,
+                error_code="EXECUTION_ERROR",
+                error_message=str(e),
+                ai_feedback=ai_feedback,
+                execution_time_ms=int((time.time() - start_time) * 1000)
+            )
+
+    async def _make_http_call(
         self,
-        params: Dict[str, Any],
-        tool: Dict[str, Any],
-        user_context: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Auto-inject parameters from user context.
-        
-        Injects:
-        - personId, assignedToId, driverId → from user_context["person_id"]
-        - tenantId → from user_context["tenant_id"]
-        """
-        tool_params = tool.get("parameters", {})
-        auto_inject_list = tool.get("auto_inject", [])
-        
-        # Inject from auto_inject list
-        for param_name in auto_inject_list:
-            if param_name in params and params[param_name]:
-                continue
-            
-            param_lower = param_name.lower()
-            context_key = self.AUTO_INJECT_MAP.get(param_lower)
-            
-            if context_key and context_key in user_context:
-                value = user_context[context_key]
-                if value:
-                    params[param_name] = value
-                    logger.debug(f"Auto-injected: {param_name}")
-        
-        # Also check tool parameters for injectable params
-        for param_name, param_def in tool_params.items():
-            if param_name in params and params[param_name]:
-                continue
-            
-            param_lower = param_name.lower()
-            context_key = self.AUTO_INJECT_MAP.get(param_lower)
-            
-            if context_key and context_key in user_context:
-                value = user_context[context_key]
-                if value:
-                    params[param_name] = value
-                    logger.debug(f"Auto-injected from schema: {param_name}")
-        
-        # Special defaults for specific operations
-        operation_lower = tool.get("operationId", "").lower()
-        
-        if "calendar" in operation_lower or "booking" in operation_lower:
-            params.setdefault("AssigneeType", 1)
-            params.setdefault("EntryType", 0)
-        
-        return params
-    
-    def _validate_and_coerce(
+        method: str,
+        url: str,
+        query_params: Optional[Dict],
+        body: Optional[Dict],
+        headers: Dict[str, str],
+        tenant_id: Optional[str]
+    ) -> APIResponse:
+        """Make HTTP call via API Gateway."""
+        return await self.gateway.execute(
+            method=HttpMethod[method],
+            path=url,
+            params=query_params,
+            body=body,
+            headers=headers,
+            tenant_id=tenant_id
+        )
+
+    def _validate_http_request(
         self,
-        params: Dict[str, Any],
-        tool: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], List[str]]:
+        method: str,
+        url: str,
+        query_params: Optional[Dict],
+        body: Optional[Dict],
+        operation_id: str
+    ) -> None:
         """
-        Validate and coerce parameter types.
-        
+        Validate HTTP request before execution.
+
+        防护措施:
+        - Ensure method is valid (GET/POST/PUT/PATCH/DELETE)
+        - Validate URL construction (no missing slashes)
+        - Warn about common mistakes (body on GET, no body on POST)
+
+        Raises:
+            ParameterValidationError: If request is invalid
+        """
+        # Validate HTTP method
+        valid_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+        if method not in valid_methods:
+            raise ParameterValidationError(
+                f"Neispravan HTTP metod '{method}' za '{operation_id}'. "
+                f"Dozvoljeni metodi: {', '.join(valid_methods)}."
+            )
+
+        # Validate URL construction
+        if not url or url == "/":
+            raise ParameterValidationError(
+                f"URL nije pravilno konstruiran za '{operation_id}'. "
+                f"Provjerite da li su svi path parametri zamijenjeni."
+            )
+
+        # Validate method-body consistency
+        if method == "GET" and body:
+            logger.warning(
+                f"⚠️ GET request sa body parametrima za '{operation_id}'. "
+                f"Body će biti ignoriran."
+            )
+
+        if method == "POST" and not body and not query_params:
+            logger.warning(
+                f"⚠️ POST request bez body i query parametara za '{operation_id}'. "
+                f"Ovo može biti greška."
+            )
+
+        logger.debug(
+            f"✅ HTTP Request validated: {method} {url} "
+            f"(query={bool(query_params)}, body={bool(body)})"
+        )
+
+    def _build_url(self, tool: "UnifiedToolDefinition") -> str:
+        """
+        Build full URL using STRICT MASTER PROMPT v3.1 formula.
+
+        URL Formula (Anti-Leakage Protocol):
+        - If tool has swagger_name: /{swagger_name}/{path}
+        - Otherwise: fallback to service_url logic
+
+        This ensures NO 404/405 errors from wrong URL construction.
+
+        Args:
+            tool: UnifiedToolDefinition with swagger_name, service_url, path
+
         Returns:
-            (coerced_params, warnings)
+            Relative URL string (APIGateway will prepend base_url)
         """
-        tool_params = tool.get("parameters", {})
-        warnings = []
-        result = {}
-        
-        for param_name, value in params.items():
-            if value is None:
-                continue
-            
-            param_def = tool_params.get(param_name, {})
-            expected_type = param_def.get("type", "string")
-            param_format = param_def.get("format")
-            
-            try:
-                coerced = self._coerce_type(value, expected_type, param_format)
-                result[param_name] = coerced
-            except (ValueError, TypeError) as e:
-                warnings.append(f"Could not coerce {param_name}: {e}")
-                result[param_name] = value
-        
-        return result, warnings
-    
-    def _coerce_type(self, value: Any, expected_type: str, param_format: Optional[str]) -> Any:
-        """Coerce value to expected type."""
-        if value is None:
-            return None
-        
-        if expected_type == "integer":
-            if isinstance(value, int):
-                return value
-            if isinstance(value, str):
-                return int(float(value))
-            return int(value)
-        
-        if expected_type == "number":
-            if isinstance(value, (int, float)):
-                return float(value)
-            return float(value)
-        
-        if expected_type == "boolean":
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str):
-                return value.lower() in ("true", "1", "yes", "da")
-            return bool(value)
-        
-        if expected_type == "string":
-            if param_format == "date-time":
-                return self._parse_datetime(value)
-            if param_format == "date":
-                return self._parse_date(value)
-            return str(value)
-        
-        if expected_type == "array":
-            if isinstance(value, list):
-                return value
-            if isinstance(value, str):
-                try:
-                    return json.loads(value)
-                except:
-                    return [value]
-            return [value]
-        
-        return value
-    
-    def _parse_datetime(self, value: Any) -> str:
-        """Parse datetime to ISO format."""
-        if isinstance(value, datetime):
-            return value.isoformat()
-        
-        if isinstance(value, str):
-            # Already ISO format
-            if "T" in value:
-                return value
-            
-            # Try common formats
-            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
-                try:
-                    dt = datetime.strptime(value, fmt)
-                    return dt.isoformat()
-                except ValueError:
-                    continue
-            
-            return value
-        
-        return str(value)
-    
-    def _parse_date(self, value: Any) -> str:
-        """Parse date to YYYY-MM-DD format."""
-        if isinstance(value, datetime):
-            return value.strftime("%Y-%m-%d")
-        
-        if isinstance(value, str):
-            if len(value) == 10 and "-" in value:
-                return value
-            
-            for fmt in ["%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y"]:
-                try:
-                    dt = datetime.strptime(value, fmt)
-                    return dt.strftime("%Y-%m-%d")
-                except ValueError:
-                    continue
-        
-        return str(value)
-    
-    def _check_required(self, params: Dict[str, Any], tool: Dict[str, Any]) -> List[str]:
-        """Check for missing required parameters."""
-        required = tool.get("required", [])
-        tool_params = tool.get("parameters", {})
-        
-        # Also check individual parameter required flags
-        for param_name, param_def in tool_params.items():
-            if param_def.get("required") and param_name not in required:
-                required.append(param_name)
-        
-        missing = []
-        for param in required:
-            if param not in params or params[param] is None:
-                missing.append(param)
-        
-        return missing
-    
-    def _substitute_path(self, path: str, params: Dict[str, Any]) -> str:
-        """Substitute {placeholders} in path."""
-        placeholders = re.findall(r"\{([a-zA-Z0-9_]+)\}", path)
-        
-        for placeholder in placeholders:
-            # Find matching param (case-insensitive)
-            for key in list(params.keys()):
-                if key.lower() == placeholder.lower():
-                    path = path.replace(f"{{{placeholder}}}", str(params[key]))
-                    del params[key]
-                    break
-        
+        # MASTER PROMPT v3.1: Strict URL construction
+        # Formula: base_url + "/" + swagger_name + "/" + path.lstrip('/')
+
+        swagger_name = tool.swagger_name
+        path = tool.path
+        service_url = tool.service_url
+
+        # Case 1: If path is absolute (complete URL), use it directly
+        if path.startswith("http://") or path.startswith("https://"):
+            logger.debug(f"Built URL: {path} (absolute path)")
+            return path
+
+        # Case 2: STRICT FORMULA - Use swagger_name if available
+        if swagger_name:
+            # Clean path
+            clean_path = path.lstrip("/")
+            # Build: /{swagger_name}/{path}
+            url = f"/{swagger_name}/{clean_path}"
+            logger.debug(f"Built URL: {url} (swagger_name={swagger_name})")
+            return url
+
+        # Case 3: Fallback - Use service_url if swagger_name is empty
+        if service_url:
+            service_url_clean = service_url.rstrip("/")
+            clean_path = path.lstrip("/")
+
+            # If service_url is absolute URL
+            if service_url_clean.startswith("http://") or service_url_clean.startswith("https://"):
+                url = f"{service_url_clean}/{clean_path}"
+                logger.debug(f"Built URL: {url} (absolute service_url)")
+                return url
+
+            # If service_url is relative (e.g., "/automation")
+            url = f"{service_url_clean}/{clean_path}"
+            logger.debug(f"Built URL: {url} (relative service_url={service_url_clean})")
+            return url
+
+        # Case 4: No swagger_name, no service_url - use path only
+        logger.warning(f"⚠️ No swagger_name or service_url for {tool.operation_id}, using path only")
         return path
-    
-    def _prepare_request(
+
+    def _build_headers(
         self,
-        params: Dict[str, Any],
-        tool: Dict[str, Any],
-        method: str
-    ) -> Tuple[Optional[Dict], Optional[Dict]]:
-        """Prepare query params and body."""
-        if method in ("GET", "DELETE"):
-            return params if params else None, None
-        
-        # For POST/PUT/PATCH: separate query from body
-        tool_params = tool.get("parameters", {})
-        query = {}
-        body = {}
-        
-        for param_name, value in params.items():
-            if value is None:
-                continue
-            
-            param_def = tool_params.get(param_name, {})
-            location = param_def.get("in", "body")
-            
-            if location == "query":
-                query[param_name] = value
-            else:
-                body[param_name] = value
-        
-        return query if query else None, body if body else None
-    
-    def _format_response(self, response: APIResponse, tool: Dict[str, Any]) -> Dict[str, Any]:
-        """Format API response."""
-        if not response.success:
-            return self._error_response(
-                response.error_message or "API call failed",
-                response.error_code or "API_ERROR",
-                status_code=response.status_code,
-                ai_feedback=self._generate_api_error_feedback(response, tool)
-            )
-        
-        operation_id = tool.get("operationId", "unknown")
-        method = tool.get("method", "GET")
-        data = response.data
-        
-        if method == "GET":
-            return self._format_get(data, operation_id)
-        elif method in ("POST", "PUT", "PATCH"):
-            return self._format_mutation(data, operation_id)
-        elif method == "DELETE":
-            return {"success": True, "deleted": True, "operation": operation_id}
-        
-        return {"success": True, "data": data, "operation": operation_id}
-    
-    def _format_get(self, data: Any, operation_id: str) -> Dict[str, Any]:
-        """Format GET response."""
-        if isinstance(data, list):
-            return {
-                "success": True,
-                "operation": operation_id,
-                "count": len(data),
-                "items": data[:100]
-            }
-        
-        if isinstance(data, dict):
-            # Extract items from common wrapper patterns
-            items = (
-                data.get("Data") or
-                data.get("Items") or
-                data.get("items") or
-                data.get("results") or
-                data.get("value")
-            )
-            
-            if isinstance(items, list):
-                return {
-                    "success": True,
-                    "operation": operation_id,
-                    "count": len(items),
-                    "total": data.get("Count") or data.get("TotalCount") or len(items),
-                    "items": items[:100]
-                }
-            
-            return {"success": True, "operation": operation_id, "data": data}
-        
-        return {"success": True, "operation": operation_id, "data": data}
-    
-    def _format_mutation(self, data: Any, operation_id: str) -> Dict[str, Any]:
-        """Format POST/PUT/PATCH response."""
-        result_id = None
-        if isinstance(data, dict):
-            result_id = data.get("Id") or data.get("id") or data.get("ID")
-        
-        return {
-            "success": True,
-            "operation": operation_id,
-            "created_id": result_id,
-            "data": data
+        tool: UnifiedToolDefinition,
+        execution_context: ToolExecutionContext
+    ) -> Dict[str, str]:
+        """
+        Build HTTP headers.
+
+        Includes:
+        - Content-Type
+        - Accept
+        - Custom headers from context
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         }
-    
-    def _error_response(
+
+        # Add custom headers from context
+        custom_headers = execution_context.user_context.get("headers", {})
+        headers.update(custom_headers)
+
+        return headers
+
+    def _extract_output_values(
         self,
-        error: str,
-        error_code: str,
-        status_code: int = None,
-        ai_feedback: str = None
+        response_data: Any,
+        output_keys: list
     ) -> Dict[str, Any]:
-        """Create error response with AI feedback."""
-        return {
-            "success": False,
-            "error": error,
-            "error_code": error_code,
-            "status_code": status_code,
-            "ai_feedback": ai_feedback or error
-        }
-    
-    def _generate_api_error_feedback(self, response: APIResponse, tool: Dict[str, Any]) -> str:
-        """Generate helpful AI feedback from API error."""
-        status = response.status_code
-        error = response.error_message or "Unknown error"
-        
-        if status == 400:
-            return f"Bad request: {error}. Check parameter values and types."
-        elif status == 401:
-            return "Authentication failed. The token may be invalid."
-        elif status == 403:
-            return f"Access denied: {error}. The user may not have permission."
-        elif status == 404:
-            return f"Not found: {error}. The resource may not exist."
-        elif status == 422:
-            return f"Validation error: {error}. Check the parameter values."
-        elif status >= 500:
-            return f"Server error: {error}. Try again later."
-        
-        return error
+        """
+        Extract output values from response for chaining.
+
+        Args:
+            response_data: API response
+            output_keys: Keys to extract
+
+        Returns:
+            Dict of extracted values
+        """
+        output_values = {}
+
+        if not response_data or not output_keys:
+            return output_values
+
+        # Handle different response structures
+        if isinstance(response_data, dict):
+            # Direct extraction
+            for key in output_keys:
+                if key in response_data:
+                    output_values[key] = response_data[key]
+                # Case-insensitive match
+                else:
+                    for resp_key, resp_value in response_data.items():
+                        if resp_key.lower() == key.lower():
+                            output_values[key] = resp_value
+                            break
+
+            # Check nested 'data' field
+            if "data" in response_data and isinstance(response_data["data"], dict):
+                for key in output_keys:
+                    if key not in output_values and key in response_data["data"]:
+                        output_values[key] = response_data["data"][key]
+
+        elif isinstance(response_data, list) and response_data:
+            # Take first item if list
+            first_item = response_data[0]
+            if isinstance(first_item, dict):
+                for key in output_keys:
+                    if key in first_item:
+                        output_values[key] = first_item[key]
+
+        return output_values

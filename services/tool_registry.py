@@ -575,6 +575,12 @@ class ToolRegistry:
 
         schema = self._resolve_ref(schema, spec)
 
+        # CRITICAL FIX: Handle direct array responses (e.g., MasterData returns array)
+        # If response is array type, extract items schema first
+        if schema.get("type") == "array":
+            items_schema = schema.get("items", {})
+            schema = self._resolve_ref(items_schema, spec)
+
         # Check for array responses (common pattern: {Items: [...], Count: 10})
         properties = schema.get("properties", {})
 

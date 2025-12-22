@@ -48,6 +48,7 @@ RUN chmod +x /app/docker/init-db.sh 2>/dev/null || true
 # Create non-root user for security
 RUN groupadd -r appgroup && \
     useradd -r -g appgroup appuser && \
+    mkdir -p /app/.cache && \
     chown -R appuser:appgroup /app
 
 # Switch to non-root user

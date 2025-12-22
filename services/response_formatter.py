@@ -26,24 +26,28 @@ class ResponseFormatter:
     def format_result(
         self,
         result: Dict[str, Any],
-        tool: Optional[Dict[str, Any]] = None
+        tool: Optional[Any] = None  # Can be UnifiedToolDefinition (Pydantic) or dict
     ) -> str:
         """
         Format API result for display.
-        
+
         Args:
             result: Execution result
-            tool: Tool metadata
-            
+            tool: Tool metadata (UnifiedToolDefinition or dict)
+
         Returns:
             Formatted string
         """
         if not result.get("success"):
             error = result.get("error", "Nepoznata greška")
             return f"❌ Greška: {error}"
-        
+
         operation = result.get("operation", "")
-        method = tool.get("method", "GET") if tool else "GET"
+        # CRITICAL FIX: Handle both Pydantic (UnifiedToolDefinition) and dict
+        if tool:
+            method = tool.method if hasattr(tool, 'method') else tool.get("method", "GET")
+        else:
+            method = "GET"
         
         if method == "GET":
             return self._format_get(result, operation)
@@ -59,26 +63,39 @@ class ResponseFormatter:
         if "items" in result:
             items = result["items"]
             count = result.get("count", len(items))
-            
+
             if not items:
                 return "Nema pronađenih rezultata."
-            
+
             if self._is_vehicle(items[0] if items else {}):
                 return self.format_vehicle_list(items)
             elif self._is_person(items[0] if items else {}):
                 return self._format_person_list(items)
             else:
                 return self._format_generic_list(items, count)
-        
+
         if "data" in result:
             data = result["data"]
-            
-            if self._is_vehicle(data):
-                return self._format_vehicle_details(data)
-            elif self._is_masterdata(data):
-                return self._format_masterdata(data)
+
+            # CRITICAL FIX: Type guard - only check structure on dict/list, not primitives
+            if isinstance(data, dict):
+                if self._is_vehicle(data):
+                    return self._format_vehicle_details(data)
+                elif self._is_masterdata(data):
+                    return self._format_masterdata(data)
+                else:
+                    return self._format_generic_object(data)
+            elif isinstance(data, list):
+                # List of items without "items" wrapper
+                if data and isinstance(data[0], dict):
+                    if self._is_vehicle(data[0]):
+                        return self.format_vehicle_list(data)
+                    elif self._is_person(data[0]):
+                        return self._format_person_list(data)
+                return self._format_generic_list(data, len(data))
             else:
-                return self._format_generic_object(data)
+                # Primitive type (string, number, etc.)
+                return f"✅ Rezultat: {data}"
         
         return "✅ Operacija uspješna."
     

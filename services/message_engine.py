@@ -50,7 +50,7 @@ class MessageEngine:
         """Initialize engine with all services."""
         self.gateway = gateway
         self.registry = registry
-        self.executor = ToolExecutor(gateway, registry)
+        self.executor = ToolExecutor(gateway)  # CRITICAL FIX: ToolExecutor only takes gateway
         self.context = context_service
         self.queue = queue_service
         self.cache = cache_service
@@ -317,23 +317,45 @@ class MessageEngine:
         conv_manager: ConversationManager,
         sender: str
     ) -> Dict[str, Any]:
-        """Execute tool call with proper error handling."""
+        """
+        Execute tool call with proper error handling and AI feedback.
+
+        Args:
+            result: Tool call result from AI containing tool name and parameters
+            user_context: User context with tenant_id, person_id, etc.
+            conv_manager: Conversation state manager
+            sender: User phone number
+
+        Returns:
+            Dict with:
+                - success: bool
+                - data: Tool execution result
+                - ai_feedback: Error feedback for AI self-correction
+                - final_response: Human-readable response (optional)
+                - needs_input: True if requires user selection/confirmation (optional)
+        """
         tool_name = result["tool"]
         parameters = result["parameters"]
-        
-        logger.info(f"🔧 Executing: {tool_name}")
-        
+
+        logger.info(f"🔧 Executing: {tool_name} with params: {list(parameters.keys())}")
+
+        # Get tool definition from registry
         tool = self.registry.get_tool(tool_name)
-        
+
         if not tool:
+            logger.error(f"❌ Tool not found: {tool_name}")
             return {
                 "success": False,
                 "data": {"error": f"Tool {tool_name} not found"},
-                "ai_feedback": f"Tool '{tool_name}' does not exist. Use a different tool.",
-                "final_response": f"Alat '{tool_name}' nije pronađen."
+                "ai_feedback": f"Tool '{tool_name}' does not exist. Use a different tool from the available list.",
+                "final_response": (
+                    f"⚠️ Tehnički problem - alat '{tool_name}' nije pronađen u sustavu.\n"
+                    f"Pokušajte reformulirati zahtjev."
+                )
             }
-        
-        method = tool.get("method", "GET")
+
+        # CRITICAL FIX: Access Pydantic property directly, not via .get()
+        method = tool.method  # UnifiedToolDefinition has 'method' property
         
         # Availability check (returns list for selection)
         if "available" in tool_name.lower() or "calendar" in tool_name.lower():
@@ -346,26 +368,61 @@ class MessageEngine:
                 return await self._request_confirmation(tool_name, parameters, user_context, conv_manager)
         
         # Direct execution
-        exec_result = await self.executor.execute(tool_name, parameters, user_context)
-        
-        if exec_result.get("success"):
-            response = self.formatter.format_result(exec_result, tool)
+        try:
+            # CRITICAL FIX: Create ToolExecutionContext and call with correct signature
+            from services.tool_contracts import ToolExecutionContext
+
+            execution_context = ToolExecutionContext(
+                user_context=user_context,
+                tool_outputs={},
+                conversation_state={}
+            )
+
+            exec_result = await self.executor.execute(tool, parameters, execution_context)
+        except Exception as e:
+            logger.error(f"❌ Tool execution exception: {e}", exc_info=True)
+            return {
+                "success": False,
+                "data": {"error": str(e)},
+                "error": str(e),
+                "ai_feedback": (
+                    f"Technical error during {tool_name} execution: {str(e)}. "
+                    f"This may be a system issue. Try a different approach or ask user to rephrase."
+                ),
+                "final_response": (
+                    f"⚠️ Izvinjavam se, došlo je do tehničkog problema.\n"
+                    f"Možete li pokušati drugačije formulirati zahtjev?"
+                )
+            }
+
+        # CRITICAL FIX: exec_result is ToolExecutionResult (Pydantic), not dict
+        if exec_result.success:
+            # Convert to dict for formatter compatibility
+            result_dict = {
+                "success": True,
+                "data": exec_result.data,
+                "operation": tool_name
+            }
+            response = self.formatter.format_result(result_dict, tool)
             return {
                 "success": True,
-                "data": exec_result,
+                "data": exec_result.data,
                 "final_response": response
             }
         else:
             # Return error with AI feedback for self-correction
-            error = exec_result.get("error", "Nepoznata greška")
-            ai_feedback = exec_result.get("ai_feedback", error)
-            
+            error = exec_result.error_message or "Nepoznata greška"
+            ai_feedback = exec_result.ai_feedback or error
+
+            # Provide human-readable error feedback to user
+            human_error = self._translate_error_for_user(error, tool_name)
+
             return {
                 "success": False,
-                "data": exec_result,
+                "data": {"error": error},
                 "error": error,
-                "ai_feedback": ai_feedback
-                # No final_response - let AI try to recover
+                "ai_feedback": ai_feedback,
+                "final_response": human_error
             }
     
     async def _handle_availability(
@@ -376,17 +433,35 @@ class MessageEngine:
         conv_manager: ConversationManager
     ) -> Dict[str, Any]:
         """Handle vehicle availability check."""
-        result = await self.executor.execute(tool_name, parameters, user_context)
-        
-        if not result.get("success"):
+        # CRITICAL FIX: Get tool object and create proper execution context
+        tool = self.registry.get_tool(tool_name)
+        if not tool:
             return {
                 "success": False,
-                "data": result,
-                "ai_feedback": result.get("ai_feedback", "Availability check failed"),
-                "final_response": f"❌ Greška: {result.get('error')}"
+                "error": f"Tool {tool_name} not found",
+                "final_response": f"⚠️ Tehnički problem - alat '{tool_name}' nije pronađen."
             }
-        
-        items = result.get("items", [])
+
+        from services.tool_contracts import ToolExecutionContext
+        execution_context = ToolExecutionContext(
+            user_context=user_context,
+            tool_outputs={},
+            conversation_state={}
+        )
+
+        result = await self.executor.execute(tool, parameters, execution_context)
+
+        # CRITICAL FIX: result is ToolExecutionResult (Pydantic), not dict
+        if not result.success:
+            return {
+                "success": False,
+                "data": {"error": result.error_message},
+                "ai_feedback": result.ai_feedback or "Availability check failed",
+                "final_response": f"❌ Greška: {result.error_message}"
+            }
+
+        # Extract items from result.data
+        items = result.data.get("items", []) if isinstance(result.data, dict) else []
         
         if not items:
             return {
@@ -418,11 +493,23 @@ class MessageEngine:
         user_context: Dict[str, Any],
         conv_manager: ConversationManager
     ) -> Dict[str, Any]:
-        """Request confirmation for operation."""
+        """
+        Request confirmation for critical operation.
+
+        Args:
+            tool_name: Name of tool to execute
+            parameters: Tool parameters
+            user_context: User context
+            conv_manager: Conversation manager
+
+        Returns:
+            Dict with needs_input=True and confirmation prompt
+        """
         await conv_manager.add_parameters(parameters)
-        
+
         tool = self.registry.get_tool(tool_name)
-        desc = tool.get("description", tool_name)[:100] if tool else tool_name
+        # CRITICAL FIX: Access Pydantic property directly
+        desc = tool.description[:100] if tool and tool.description else tool_name
         
         message = f"📋 **Potvrda operacije:**\n\n{desc}\n\n"
         
@@ -447,6 +534,57 @@ class MessageEngine:
         """Check if tool requires confirmation."""
         confirm_patterns = ["calendar", "booking", "case", "delete", "create", "update"]
         return any(p in tool_name.lower() for p in confirm_patterns)
+
+    def _translate_error_for_user(self, error: str, tool_name: str) -> str:
+        """
+        Translate technical error to human-readable Croatian message.
+
+        Args:
+            error: Technical error message
+            tool_name: Name of tool that failed
+
+        Returns:
+            Human-readable error message in Croatian
+        """
+        error_lower = error.lower()
+
+        # Common error patterns
+        if "not found" in error_lower or "404" in error_lower:
+            return (
+                f"❌ Traženi resurs nije pronađen.\n"
+                f"Možete li ponoviti zahtjev sa drugim parametrima?"
+            )
+
+        if "permission" in error_lower or "403" in error_lower or "unauthorized" in error_lower:
+            return (
+                f"❌ Nemate dozvolu za ovu operaciju.\n"
+                f"Kontaktirajte administratora ako mislite da je ovo greška."
+            )
+
+        if "timeout" in error_lower or "timed out" in error_lower:
+            return (
+                f"⏱️ Zahtjev je istekao.\n"
+                f"Molim pokušajte ponovno za trenutak."
+            )
+
+        if "connection" in error_lower or "network" in error_lower:
+            return (
+                f"🌐 Problem s mrežom.\n"
+                f"Molim pokušajte ponovno."
+            )
+
+        if "validation" in error_lower or "invalid" in error_lower:
+            return (
+                f"⚠️ Nevažeći podaci.\n"
+                f"Provjerite unesene informacije i pokušajte ponovno."
+            )
+
+        # Generic error with tool name context
+        return (
+            f"❌ Došlo je do greške kod operacije '{tool_name}'.\n"
+            f"Detalji: {error}\n\n"
+            f"Pokušajte reformulirati zahtjev ili kontaktirajte podršku."
+        )
     
     async def _handle_selection(
         self,
@@ -526,23 +664,41 @@ class MessageEngine:
             params["FromTime"] = params.pop("from")
         if "to" in params and "ToTime" not in params:
             params["ToTime"] = params.pop("to")
-        
+
+        # CRITICAL FIX: Get tool object and create proper execution context
+        tool = self.registry.get_tool(tool_name)
+        if not tool:
+            await conv_manager.reset()
+            return f"⚠️ Tehnički problem - alat '{tool_name}' nije pronađen."
+
+        from services.tool_contracts import ToolExecutionContext
+        execution_context = ToolExecutionContext(
+            user_context=user_context,
+            tool_outputs={},
+            conversation_state={}
+        )
+
         # Execute
-        result = await self.executor.execute(tool_name, params, user_context)
+        result = await self.executor.execute(tool, params, execution_context)
         
         # Complete flow
         await conv_manager.complete()
         await conv_manager.reset()
-        
-        if result.get("success"):
-            created_id = result.get("created_id", "")
+
+        # CRITICAL FIX: result is ToolExecutionResult (Pydantic), not dict
+        if result.success:
+            # Extract created_id from result.data if available
+            created_id = ""
+            if isinstance(result.data, dict):
+                created_id = result.data.get("created_id", "") or result.data.get("Id", "")
+
             return (
                 f"✅ **Operacija uspješna!**\n\n"
                 f"{'📝 ID: ' + str(created_id) if created_id else ''}\n\n"
                 f"Kako vam još mogu pomoći?"
             )
         else:
-            error = result.get("error", "Nepoznata greška")
+            error = result.error_message or "Nepoznata greška"
             return f"❌ Greška: {error}"
     
     async def _handle_gathering(

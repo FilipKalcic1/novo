@@ -122,22 +122,35 @@ class Settings(BaseSettings):
         return self.MOBILITY_TENANT_ID
     
     @property
-    def swagger_services(self) -> Dict[str, str]:
-        return {
+    def swagger_sources(self) -> List[str]:
+        """
+        Get Swagger sources from environment variable.
+
+        Expected format: SWAGGER_SOURCES=https://api.example.com/service1/swagger.json,https://api.example.com/service2/swagger.json
+
+        Fallback: Auto-discover from MOBILITY_API_URL if configured.
+        """
+        # Try environment variable first
+        sources_env = os.getenv("SWAGGER_SOURCES", "")
+        if sources_env:
+            return [s.strip() for s in sources_env.split(",") if s.strip()]
+
+        # Fallback: Auto-discover from API base (backward compatibility)
+        if not self.MOBILITY_API_URL:
+            return []
+
+        base = self.MOBILITY_API_URL.rstrip("/")
+
+        # Default services (can be overridden via env)
+        default_services = {
             "automation": "v1.0.0",
             "tenantmgt": "v2.0.0-alpha",
             "vehiclemgt": "v2.0.0-alpha"
         }
-    
-    @property
-    def swagger_sources(self) -> List[str]:
-        if not self.MOBILITY_API_URL:
-            return []
-        
-        base = self.MOBILITY_API_URL.rstrip("/")
+
         return [
             f"{base}/{service}/swagger/{version}/swagger.json"
-            for service, version in self.swagger_services.items()
+            for service, version in default_services.items()
         ]
     
     @property

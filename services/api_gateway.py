@@ -220,11 +220,20 @@ class APIGateway:
             raise ValueError(f"Unsupported method: {method}")
     
     def _build_url(self, path: str, params: Optional[Dict[str, Any]]) -> str:
-        """Gradi URL i osigurava da se OData Filter ne pokvari enkodiranjem."""
-        if not path.startswith("/"):
-            path = "/" + path
-        
-        url = f"{self.base_url}{path}"
+        """
+        Build URL with smart detection.
+
+        CRITICAL FIX: If path is already a complete URL (starts with http),
+        don't prepend base_url - just use it as-is.
+        """
+        # If path is already a complete URL, use it directly
+        if path.startswith("http://") or path.startswith("https://"):
+            url = path
+        else:
+            # Relative path - prepend base_url
+            if not path.startswith("/"):
+                path = "/" + path
+            url = f"{self.base_url}{path}"
         
         if params:
             clean = {k: v for k, v in params.items() if v is not None}
@@ -241,15 +250,76 @@ class APIGateway:
         return url
     
     def _parse_response(self, response: httpx.Response) -> APIResponse:
-        """Parse HTTP response."""
+        """
+        Parse HTTP response with FIREWALL protection.
+
+        MASTER PROMPT v3.1: JSON ENFORCEMENT
+        - Only JSON responses allowed (Content-Type: application/json)
+        - HTML responses BLOCKED (auth redirects, nginx errors)
+        - User NEVER sees HTML tags or raw error codes
+        """
         headers_dict = dict(response.headers)
-        
+        content_type = response.headers.get("content-type", "").lower()
+
+        # FIREWALL GATE 1: Detect HTML response
+        is_html = (
+            "text/html" in content_type or
+            response.text.strip().startswith("<!DOCTYPE") or
+            response.text.strip().startswith("<html")
+        )
+
+        if is_html:
+            logger.error(
+                f"🚨 HTML LEAKAGE BLOCKED: Status={response.status_code}, "
+                f"Content-Type={content_type}"
+            )
+
+            # MASTER PROMPT v3.1: User-facing clean error messages
+            if response.status_code == 200:
+                # Even with 200, HTML means auth redirect or wrong endpoint
+                error_msg = (
+                    "Trenutno ne mogu dohvatiti te podatke zbog tehničkih poteškoća sa servisom. "
+                    "API je vratio UI/Login stranicu umjesto podataka."
+                )
+                error_code = "HTML_RESPONSE_AUTH_ERROR"
+                status = 401  # Treat as auth error
+            elif response.status_code == 404:
+                error_msg = (
+                    "Trenutno ne mogu dohvatiti te podatke zbog tehničkih poteškoća sa servisom. "
+                    "Traženi resurs nije pronađen."
+                )
+                error_code = "NOT_FOUND"
+                status = 404
+            elif response.status_code == 405:
+                error_msg = (
+                    "Trenutno ne mogu dohvatiti te podatke zbog tehničkih poteškoća sa servisom. "
+                    "Greška u konfiguraciji API zahtjeva."
+                )
+                error_code = "METHOD_NOT_ALLOWED"
+                status = 405
+            else:
+                error_msg = (
+                    "Trenutno ne mogu dohvatiti te podatke zbog tehničkih poteškoća sa servisom."
+                )
+                error_code = "HTML_RESPONSE_ERROR"
+                status = response.status_code
+
+            return APIResponse(
+                success=False,
+                status_code=status,
+                data=None,
+                error_message=error_msg,
+                error_code=error_code,
+                headers=headers_dict
+            )
+
+        # FIREWALL GATE 2: Normal error handling (non-HTML)
         if response.status_code >= 400:
             error_msg = self._extract_error_message(response)
             error_code = self._map_status_code(response.status_code)
-            
+
             logger.warning(f"API error: {response.status_code} - {error_msg[:200]}")
-            
+
             return APIResponse(
                 success=False,
                 status_code=response.status_code,
@@ -258,13 +328,15 @@ class APIGateway:
                 error_code=error_code,
                 headers=headers_dict
             )
-        
-        # Parse JSON
+
+        # FIREWALL GATE 3: Success response - parse JSON
         try:
             data = response.json()
-        except Exception:
+        except Exception as e:
+            # JSON parsing failed - might be empty response or plain text
+            logger.warning(f"JSON parsing failed: {e}")
             data = response.text if response.text else None
-        
+
         return APIResponse(
             success=True,
             status_code=response.status_code,
@@ -292,6 +364,7 @@ class APIGateway:
             401: "UNAUTHORIZED",
             403: "FORBIDDEN",
             404: "NOT_FOUND",
+            405: "METHOD_NOT_ALLOWED",
             422: "VALIDATION_ERROR",
             429: "RATE_LIMITED",
             500: "SERVER_ERROR",
