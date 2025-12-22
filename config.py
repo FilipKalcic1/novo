@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     AI_MAX_TOKENS: int = Field(default=1500)
     EMBEDDING_BATCH_SIZE: int = Field(default=5)
     SIMILARITY_THRESHOLD: float = Field(default=0.55)
+
+    # ACTION-FIRST PROTOCOL: Force tool call when similarity >= this threshold
+    # MASTER PROMPT v9.0: Bot MUST execute tool_call, NOT generic text response
+    ACTION_THRESHOLD: float = Field(
+        default=0.85,
+        description="Similarity threshold for forced tool execution (no text fallback)"
+    )
     
     # =========================================================================
     # RATE LIMITING

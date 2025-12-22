@@ -68,7 +68,53 @@ class ParameterManager:
     - Type casting and validation
     - Path parameter substitution
     - Missing parameter detection with hints
+
+    MASTER PROMPT v9.0 - ROBUSTAN HANDOFF:
+    When parameters are missing, ask for ONE parameter at a time with a clear question.
     """
+
+    # Human-friendly parameter descriptions (Croatian)
+    # Used for generating clear, single-parameter questions
+    PARAM_DESCRIPTIONS: Dict[str, str] = {
+        # Time/Date parameters
+        "fromtime": "Od kada? (npr. 'sutra u 9:00' ili '2025-01-15T09:00')",
+        "from": "Od kada? (npr. 'sutra u 9:00')",
+        "totime": "Do kada? (npr. 'sutra u 17:00' ili '2025-01-15T17:00')",
+        "to": "Do kada? (npr. 'sutra u 17:00')",
+        "date": "Koji datum? (npr. 'sutra' ili '15.01.2025')",
+        "startdate": "Početni datum?",
+        "enddate": "Krajnji datum?",
+
+        # Vehicle parameters
+        "vehicleid": "Koje vozilo? (navedite registraciju ili naziv)",
+        "mileage": "Kolika je trenutna kilometraža? (npr. '45000')",
+        "licenceplate": "Koja je registracija vozila?",
+        "vin": "Koji je VIN broj vozila?",
+
+        # Person parameters
+        "personid": "Za koju osobu?",
+        "driverid": "Koji vozač?",
+
+        # Description/Text parameters
+        "description": "Možete li opisati situaciju?",
+        "comment": "Imate li komentar?",
+        "note": "Želite li dodati bilješku?",
+        "reason": "Koji je razlog?",
+
+        # Booking parameters
+        "purpose": "Koja je svrha rezervacije?",
+        "destination": "Koja je destinacija?",
+
+        # Generic
+        "name": "Koji naziv?",
+        "title": "Koji naslov?",
+        "value": "Koja vrijednost?",
+        "amount": "Koji iznos?",
+        "quantity": "Koja količina?",
+        "status": "Koji status?",
+        "type": "Koji tip?",
+        "category": "Koja kategorija?",
+    }
 
     def __init__(self):
         """Initialize parameter manager."""
@@ -125,13 +171,21 @@ class ParameterManager:
         warnings.extend(cast_warnings)
 
         # Step 5: Check required parameters
+        # MASTER PROMPT v9.0 - ROBUSTAN HANDOFF: Ask for ONE parameter at a time
         missing = self._check_required_params(tool, validated)
         if missing:
-            # Find tools that can provide missing params
+            # Get the FIRST missing parameter only
+            first_missing = missing[0]
+
+            # Generate human-friendly question for this specific parameter
+            question = self._get_parameter_question(first_missing, tool)
+
+            # Find tools that can provide missing params (for AI context)
             suggested = self._suggest_provider_tools(tool, missing)
+
             raise ParameterValidationError(
-                f"Nedostaju obavezni parametri: {', '.join(missing)}",
-                missing_params=missing,
+                question,  # Single, clear question
+                missing_params=[first_missing],  # Only first parameter
                 suggested_tools=suggested
             )
 
@@ -562,6 +616,54 @@ class ParameterManager:
         """
         # TODO: Query registry for tools with matching output_keys
         return []
+
+    def _get_parameter_question(
+        self,
+        param_name: str,
+        tool: UnifiedToolDefinition
+    ) -> str:
+        """
+        Generate human-friendly question for a missing parameter.
+
+        MASTER PROMPT v9.0 - ROBUSTAN HANDOFF:
+        Returns a SINGLE, CLEAR question in Croatian for the user.
+
+        Priority:
+        1. Check PARAM_DESCRIPTIONS map (most common params)
+        2. Use parameter's own description from Swagger
+        3. Generate generic question from param name
+
+        Args:
+            param_name: Name of missing parameter
+            tool: Tool definition (for accessing param description)
+
+        Returns:
+            Human-friendly question in Croatian
+        """
+        param_lower = param_name.lower()
+
+        # Priority 1: Check our predefined descriptions
+        if param_lower in self.PARAM_DESCRIPTIONS:
+            return self.PARAM_DESCRIPTIONS[param_lower]
+
+        # Priority 2: Use parameter's Swagger description if available
+        param_def = tool.parameters.get(param_name)
+        if param_def and param_def.description:
+            desc = param_def.description.strip()
+            # If description is a question or statement, use it
+            if desc:
+                # Add question mark if missing
+                if not desc.endswith("?"):
+                    return f"{desc}?"
+                return desc
+
+        # Priority 3: Generate question from param name
+        # Convert camelCase/PascalCase to readable format
+        import re
+        readable = re.sub(r'([a-z])([A-Z])', r'\1 \2', param_name)
+        readable = readable.replace("_", " ").lower()
+
+        return f"Molim unesite {readable}:"
 
     def prepare_request(
         self,

@@ -44,36 +44,51 @@ class AIOrchestrator:
         self,
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        forced_tool: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyze user input and decide on action.
-        
+
+        MASTER PROMPT v9.0 - ACTION-FIRST PROTOCOL:
+        If forced_tool is provided, LLM MUST call that tool (no text fallback).
+        This ensures high-confidence matches (similarity >= 0.85) always execute.
+
         Args:
             messages: Conversation history
             tools: Available tools
             system_prompt: System instructions
-            
+            forced_tool: If set, force LLM to call this specific tool (no "auto")
+
         Returns:
             {type: "tool_call"|"text", ...}
         """
         full_messages = []
-        
+
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
-        
+
         full_messages.extend(messages)
-        
+
         call_args = {
             "model": self.model,
             "messages": full_messages,
             "temperature": settings.AI_TEMPERATURE,
             "max_tokens": settings.AI_MAX_TOKENS
         }
-        
+
         if tools:
             call_args["tools"] = tools
-            call_args["tool_choice"] = "auto"
+
+            # ACTION-FIRST PROTOCOL: Force specific tool if similarity >= ACTION_THRESHOLD
+            if forced_tool:
+                call_args["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": forced_tool}
+                }
+                logger.info(f"🎯 FORCED TOOL CALL: {forced_tool} (similarity >= {settings.ACTION_THRESHOLD})")
+            else:
+                call_args["tool_choice"] = "auto"
         
         try:
             response = await self.client.chat.completions.create(**call_args)

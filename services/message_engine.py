@@ -225,37 +225,67 @@ class MessageEngine:
         user_context: Dict[str, Any],
         conv_manager: ConversationManager
     ) -> str:
-        """Handle new request with AI tool calling."""
+        """
+        Handle new request with AI tool calling.
+
+        MASTER PROMPT v9.0 - ACTION-FIRST PROTOCOL:
+        If best tool has similarity >= ACTION_THRESHOLD (0.85), force tool execution.
+        Bot is FORBIDDEN from sending generic text response in this case.
+        """
         # Get history
         history = await self.context.get_recent_messages(sender)
-        
+
         # Build messages for AI
         messages = history.copy()
         messages.append({"role": "user", "content": text})
-        
-        # Get relevant tools
-        tools = await self.registry.find_relevant_tools(text, top_k=5)
-        
-        if tools:
-            tool_names = [t["function"]["name"] for t in tools]
+
+        # Get relevant tools WITH SCORES for ACTION-FIRST decision
+        tools_with_scores = await self.registry.find_relevant_tools_with_scores(
+            text, top_k=5
+        )
+
+        # Extract tools and determine if forced execution is needed
+        tools = [t["schema"] for t in tools_with_scores]
+        forced_tool = None
+
+        if tools_with_scores:
+            # Find best match
+            best_match = max(tools_with_scores, key=lambda t: t["score"])
+            best_score = best_match["score"]
+            best_tool_name = best_match["name"]
+
+            tool_names = [t["name"] for t in tools_with_scores]
             logger.info(f"🔧 Available tools: {tool_names}")
-        
+            logger.info(f"🎯 Best match: {best_tool_name} (score={best_score:.3f})")
+
+            # ACTION-FIRST PROTOCOL: Force tool call if score >= ACTION_THRESHOLD
+            if best_score >= settings.ACTION_THRESHOLD:
+                forced_tool = best_tool_name
+                logger.info(
+                    f"⚡ ACTION-FIRST: Forcing {forced_tool} "
+                    f"(score {best_score:.3f} >= threshold {settings.ACTION_THRESHOLD})"
+                )
+
         # Build system prompt
         system_prompt = self.ai.build_system_prompt(
             user_context,
             conv_manager.to_dict() if conv_manager.is_in_flow() else None
         )
-        
+
         # AI iteration loop with error feedback
         current_messages = messages.copy()
-        
+
         for iteration in range(self.MAX_ITERATIONS):
             logger.debug(f"AI iteration {iteration + 1}/{self.MAX_ITERATIONS}")
-            
+
+            # Pass forced_tool on first iteration only (subsequent iterations are corrections)
+            current_forced = forced_tool if iteration == 0 else None
+
             result = await self.ai.analyze(
                 messages=current_messages,
                 tools=tools,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                forced_tool=current_forced
             )
             
             if result.get("type") == "error":
