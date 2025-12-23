@@ -948,6 +948,9 @@ class ToolRegistry:
             scored = boosted_scored
             logger.info(f"🎯 Applied domain boosts: {domain_boosts}")
 
+        # NEW v2.1: GET/DELETE DISAMBIGUATION
+        scored = self._apply_method_disambiguation(query, scored)
+
         scored.sort(key=lambda x: x[0], reverse=True)
 
         # FIX #12: Description-based re-ranking for low-scoring matches
@@ -1003,6 +1006,10 @@ class ToolRegistry:
         Find relevant tools WITH SIMILARITY SCORES.
 
         Same as find_relevant_tools but returns scores for ReasoningEngine.
+
+        NEW v2.1: GET/DELETE DISAMBIGUATION
+        When query is a read-type question (what is X, show me, etc.),
+        penalize DELETE/PUT/PATCH methods to prevent accidental mutations.
 
         Returns:
             List of dicts with:
@@ -1061,6 +1068,11 @@ class ToolRegistry:
                         boost = max(boost, boost_score)
                 boosted_scored.append((similarity + boost, op_id))
             scored = boosted_scored
+
+        # NEW v2.1: GET/DELETE DISAMBIGUATION
+        # Detect if query is read-type (what is X, show me, prikaži, koja je)
+        # and penalize dangerous mutations
+        scored = self._apply_method_disambiguation(query, scored)
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
@@ -1241,6 +1253,141 @@ class ToolRegistry:
             return 0.0
 
         return dot / (norm_a * norm_b)
+
+    def _apply_method_disambiguation(
+        self,
+        query: str,
+        scored: List[Tuple[float, str]]
+    ) -> List[Tuple[float, str]]:
+        """
+        NEW v2.1: GET/DELETE DISAMBIGUATION
+
+        Problem iz logova:
+            Korisnik: "Kako se zove moje vozilo"
+            Sustav bira: delete_Vehicles (score 0.955) ❌
+
+        Rješenje:
+            Detektiraj "read intent" u query-ju i penaliziraj DELETE/PUT/PATCH.
+
+        Read intent patterns (Croatian + English):
+            - "koja je", "što je", "kolika je", "kakva je"
+            - "prikaži", "pokaži", "daj mi", "reci mi"
+            - "what is", "show me", "tell me", "get"
+            - pitanja sa "?"
+
+        Args:
+            query: User query
+            scored: List of (score, operation_id) tuples
+
+        Returns:
+            Modified scored list with penalties applied
+        """
+        query_lower = query.lower().strip()
+
+        # Patterns indicating READ intent
+        read_patterns = [
+            # Croatian questions
+            r'koja?\s+je', r'što\s+je', r'kolika?\s+je', r'kakv[aoi]?\s+je',
+            r'koja?\s+su', r'koji?\s+su', r'koliko\s+ima',
+            r'kako\s+se\s+zove', r'sto\s+je', r'kakvo\s+je',  # Additional Croatian
+            # Croatian commands for reading
+            r'prikaži', r'pokaži', r'daj\s+mi', r'reci\s+mi',
+            r'pronađi', r'nađi', r'traži', r'pretraži',
+            r'prikazi', r'pokazi',  # Without diacritics
+            # English questions
+            r'what\s+is', r'what\s+are', r'how\s+much', r'how\s+many',
+            r'show\s+me', r'tell\s+me', r'get\s+me', r'find',
+            r'list', r'display', r'view',
+            # Common question patterns
+            r'\?$',  # Ends with question mark
+            r'^ima\s+li', r'^postoji\s+li',  # Croatian questions
+            r'^is\s+there', r'^are\s+there',  # English questions
+        ]
+
+        # Patterns indicating MUTATION intent (user explicitly wants to change)
+        mutation_patterns = [
+            r'obriši', r'izbriši', r'ukloni', r'makni',  # Croatian delete
+            r'delete', r'remove', r'erase', r'destroy',  # English delete
+            r'dodaj', r'kreiraj', r'napravi', r'stvori',  # Croatian create
+            r'add', r'create', r'make', r'new',  # English create
+            r'promijeni', r'ažuriraj', r'izmijeni', r'uredi',  # Croatian update
+            r'update', r'change', r'modify', r'edit',  # English update
+            r'želim\s+obrisati', r'hoću\s+obrisati',  # Explicit Croatian intent
+        ]
+
+        # Check if query has read intent
+        is_read_intent = any(
+            re.search(pattern, query_lower)
+            for pattern in read_patterns
+        )
+
+        # Check if query has explicit mutation intent
+        is_mutation_intent = any(
+            re.search(pattern, query_lower)
+            for pattern in mutation_patterns
+        )
+
+        # If mutation intent is explicit, don't penalize
+        if is_mutation_intent:
+            logger.debug("Detected MUTATION intent - no penalties applied")
+            return scored
+
+        # If no clear read intent either, be conservative
+        if not is_read_intent:
+            logger.debug("No clear intent detected - applying light penalties")
+            penalty_factor = 0.1  # Light penalty
+        else:
+            logger.info(f"🔍 Detected READ intent in: '{query}'")
+            penalty_factor = 0.25  # Stronger penalty for clear read intent
+
+        # Apply penalties to dangerous methods
+        adjusted = []
+        for score, op_id in scored:
+            tool = self.tools.get(op_id)
+            if not tool:
+                adjusted.append((score, op_id))
+                continue
+
+            op_id_lower = op_id.lower()
+
+            # Penalize DELETE methods heavily
+            if tool.method == "DELETE" or "delete" in op_id_lower:
+                penalty = penalty_factor * 2  # Double penalty for DELETE
+                new_score = max(0, score - penalty)
+                if score != new_score:
+                    logger.debug(
+                        f"🔻 Penalized DELETE: {op_id} "
+                        f"({score:.3f} → {new_score:.3f})"
+                    )
+                adjusted.append((new_score, op_id))
+
+            # Penalize PUT/PATCH (updates) lightly
+            elif tool.method in ("PUT", "PATCH") or any(
+                x in op_id_lower for x in ["update", "put", "patch"]
+            ):
+                penalty = penalty_factor
+                new_score = max(0, score - penalty)
+                adjusted.append((new_score, op_id))
+
+            # Penalize POST slightly (creates)
+            elif tool.method == "POST" and "get" not in op_id_lower:
+                # Some "POST" methods are actually queries (like search)
+                if any(x in op_id_lower for x in ["create", "add", "new", "insert"]):
+                    penalty = penalty_factor * 0.5
+                    new_score = max(0, score - penalty)
+                    adjusted.append((new_score, op_id))
+                else:
+                    adjusted.append((score, op_id))
+
+            # Boost GET methods slightly for read intent
+            elif tool.method == "GET" and is_read_intent:
+                boost = 0.05  # Small boost for GET on read intent
+                adjusted.append((score + boost, op_id))
+
+            else:
+                adjusted.append((score, op_id))
+
+        return adjusted
 
     # ═══════════════════════════════════════════════
     # CACHE MANAGEMENT

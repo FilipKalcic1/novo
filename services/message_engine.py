@@ -1,6 +1,6 @@
 """
 Message Engine
-Version: 11.0
+Version: 12.0
 
 Main message processing orchestrator.
 
@@ -8,6 +8,7 @@ CRITICAL FIXES:
 1. Uses Redis-backed ConversationManager (survives restarts)
 2. Passes error feedback to AI for self-correction
 3. Better tool execution loop with error recovery
+4. NEW v12.0: Entity Pre-Resolution for "Vozilo 1", "moje vozilo" references
 """
 
 import json
@@ -241,7 +242,19 @@ class MessageEngine:
         MASTER PROMPT v9.0 - ACTION-FIRST PROTOCOL:
         If best tool has similarity >= ACTION_THRESHOLD (0.85), force tool execution.
         Bot is FORBIDDEN from sending generic text response in this case.
+
+        NEW v12.0 - ENTITY PRE-RESOLUTION:
+        Before AI processing, detect and resolve entity references
+        like "Vozilo 1", "moje vozilo", "Golf" to actual UUIDs.
         """
+        # NEW v12.0: Pre-resolve entity references BEFORE AI processing
+        pre_resolved = await self._pre_resolve_entity_references(
+            text, user_context, conv_manager
+        )
+
+        if pre_resolved:
+            logger.info(f"📌 Pre-resolved entities: {list(pre_resolved.keys())}")
+
         # Get history
         history = await self.context.get_recent_messages(sender)
 
@@ -746,6 +759,77 @@ class MessageEngine:
                     return value
 
         return None
+
+    async def _pre_resolve_entity_references(
+        self,
+        text: str,
+        user_context: Dict[str, Any],
+        conv_manager: ConversationManager
+    ) -> Dict[str, Any]:
+        """
+        NEW v12.0: Pre-resolve entity references BEFORE sending to AI.
+
+        This solves the "Vozilo 1" → UUID problem by:
+        1. Detecting entity references in user text
+        2. Resolving them to actual UUIDs
+        3. Storing in tool_outputs for parameter injection
+
+        Example:
+            Input: "Dodaj kilometražu na Vozilo 1"
+            → Detects "Vozilo 1" as ordinal reference
+            → Resolves to actual VehicleId
+            → Stores in tool_outputs["VehicleId"]
+            → AI can now use this ID in tool calls
+
+        Args:
+            text: User input text
+            user_context: User context with vehicle info
+            conv_manager: Conversation manager for storing resolved values
+
+        Returns:
+            Dict with resolved values (may be empty)
+        """
+        resolved = {}
+
+        try:
+            # 1. Try to detect vehicle reference
+            entity_ref = self.dependency_resolver.detect_entity_reference(
+                text, entity_type="vehicle"
+            )
+
+            if entity_ref:
+                logger.info(f"🔍 Pre-resolving entity: {entity_ref}")
+
+                # Resolve the reference
+                resolution = await self.dependency_resolver.resolve_entity_reference(
+                    reference=entity_ref,
+                    user_context=user_context,
+                    executor=self.executor
+                )
+
+                if resolution.success:
+                    logger.info(
+                        f"✅ Pre-resolved VehicleId: {resolution.resolved_value} "
+                        f"(from '{entity_ref.value}')"
+                    )
+
+                    resolved["VehicleId"] = resolution.resolved_value
+                    resolved["vehicleId"] = resolution.resolved_value
+
+                    # Store in conversation context for future use
+                    if hasattr(conv_manager.context, 'tool_outputs'):
+                        conv_manager.context.tool_outputs["VehicleId"] = resolution.resolved_value
+                        conv_manager.context.tool_outputs["vehicleId"] = resolution.resolved_value
+                        await conv_manager.save()
+                else:
+                    logger.warning(
+                        f"⚠️ Failed to pre-resolve entity: {resolution.error_message}"
+                    )
+
+        except Exception as e:
+            logger.error(f"Entity pre-resolution error: {e}", exc_info=True)
+
+        return resolved
 
     def _translate_error_for_user(self, error: str, tool_name: str) -> str:
         """
