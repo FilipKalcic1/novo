@@ -4,7 +4,7 @@ services:
   # === PostgreSQL ===
   postgres:
     image: postgres:15-alpine
-    container_name: fleet_postgres
+    container_name: fleet_postgres2
     restart: unless-stopped
     environment:
       POSTGRES_USER: appuser
@@ -27,7 +27,7 @@ services:
   # === Redis ===
   redis:
     image: redis:7-alpine
-    container_name: fleet_redis
+    container_name: fleet_redis2
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
@@ -45,7 +45,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fleet_api
+    container_name: fleet_api2
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -85,7 +85,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fleet_worker
+    container_name: fleet_worker2
     restart: unless-stopped
     command: python worker.py
 

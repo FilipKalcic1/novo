@@ -182,6 +182,7 @@ class ToolExecutor:
                 error_code="PARAMETER_VALIDATION_ERROR",
                 error_message=str(e),
                 ai_feedback=ai_feedback,
+                missing_params=e.missing_params,  # KRITIČNO: Proslijedi missing_params za auto-chaining
                 execution_time_ms=int((time.time() - start_time) * 1000)
             )
 

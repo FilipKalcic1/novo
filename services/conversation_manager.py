@@ -40,7 +40,12 @@ class ConversationContext:
     confirmation_message: Optional[str] = None
     started_at: Optional[str] = None
     last_updated: Optional[str] = None
-    
+
+    # KRITIČNO: tool_outputs za dependency chaining
+    # Sprema output vrijednosti iz prethodnih tool poziva
+    # Npr: {"VehicleId": "uuid-123", "PersonId": "uuid-456"}
+    tool_outputs: Dict[str, Any] = field(default_factory=dict)
+
     def reset(self):
         """Reset to idle state."""
         self.state = ConversationState.IDLE.value
@@ -51,6 +56,7 @@ class ConversationContext:
         self.displayed_items = []
         self.selected_item = None
         self.confirmation_message = None
+        self.tool_outputs = {}  # KRITIČNO: Reset tool outputs
 
 
 class ConversationManager:

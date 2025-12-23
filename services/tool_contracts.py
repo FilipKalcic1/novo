@@ -170,6 +170,12 @@ class ToolExecutionResult(BaseModel):
     error_message: Optional[str] = None
     ai_feedback: Optional[str] = None  # Croatian explanation for LLM
 
+    # KRITIČNO za auto-chaining: Lista parametara koji nedostaju
+    missing_params: List[str] = Field(
+        default_factory=list,
+        description="Missing required parameters (for auto-chaining)"
+    )
+
     # Metadata
     execution_time_ms: Optional[int] = None
     http_status: Optional[int] = None

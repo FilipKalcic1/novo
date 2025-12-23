@@ -20,6 +20,8 @@ from services.tool_executor import ToolExecutor
 from services.ai_orchestrator import AIOrchestrator
 from services.response_formatter import ResponseFormatter
 from services.user_service import UserService
+from services.dependency_resolver import DependencyResolver
+from services.error_learning import ErrorLearningService
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -50,13 +52,21 @@ class MessageEngine:
         """Initialize engine with all services."""
         self.gateway = gateway
         self.registry = registry
-        self.executor = ToolExecutor(gateway)  # CRITICAL FIX: ToolExecutor only takes gateway
+        self.executor = ToolExecutor(gateway)
         self.context = context_service
         self.queue = queue_service
         self.cache = cache_service
         self.db = db_session
         self.redis = context_service.redis if context_service else None
-        
+
+        # KRITIČNO: DependencyResolver za automatski tool chaining
+        self.dependency_resolver = DependencyResolver(registry)
+
+        # KRITIČNO: ErrorLearningService za self-correction
+        self.error_learning = ErrorLearningService(
+            redis_client=self.redis
+        )
+
         self.ai = AIOrchestrator()
         self.formatter = ResponseFormatter()
     
@@ -345,16 +355,24 @@ class MessageEngine:
         result: Dict[str, Any],
         user_context: Dict[str, Any],
         conv_manager: ConversationManager,
-        sender: str
+        sender: str,
+        chain_depth: int = 0
     ) -> Dict[str, Any]:
         """
-        Execute tool call with proper error handling and AI feedback.
+        Execute tool call with AUTOMATIC DEPENDENCY CHAINING.
+
+        MASTER PROMPT v9.0 - KRITIČNA KOMPONENTA:
+        Kad parametar nedostaje (npr. VehicleId), sustav AUTOMATSKI:
+        1. Pronalazi provider tool (get_Vehicles)
+        2. Izvršava chain
+        3. Koristi rezultat za originalni tool
 
         Args:
             result: Tool call result from AI containing tool name and parameters
             user_context: User context with tenant_id, person_id, etc.
             conv_manager: Conversation state manager
             sender: User phone number
+            chain_depth: Current chain depth (prevents infinite loops)
 
         Returns:
             Dict with:
@@ -364,10 +382,12 @@ class MessageEngine:
                 - final_response: Human-readable response (optional)
                 - needs_input: True if requires user selection/confirmation (optional)
         """
+        MAX_CHAIN_DEPTH = 3  # Prevent infinite loops
+
         tool_name = result["tool"]
         parameters = result["parameters"]
 
-        logger.info(f"🔧 Executing: {tool_name} with params: {list(parameters.keys())}")
+        logger.info(f"🔧 Executing: {tool_name} with params: {list(parameters.keys())} (chain_depth={chain_depth})")
 
         # Get tool definition from registry
         tool = self.registry.get_tool(tool_name)
@@ -384,48 +404,82 @@ class MessageEngine:
                 )
             }
 
-        # CRITICAL FIX: Access Pydantic property directly, not via .get()
-        method = tool.method  # UnifiedToolDefinition has 'method' property
-        
+        method = tool.method
+
         # Availability check (returns list for selection)
         if "available" in tool_name.lower() or "calendar" in tool_name.lower():
             if method == "GET" and "vehicle" in tool_name.lower():
                 return await self._handle_availability(tool_name, parameters, user_context, conv_manager)
-        
+
         # POST/PUT may need confirmation for critical operations
         if method in ("POST", "PUT", "PATCH"):
             if self._requires_confirmation(tool_name):
                 return await self._request_confirmation(tool_name, parameters, user_context, conv_manager)
-        
-        # Direct execution
-        try:
-            # CRITICAL FIX: Create ToolExecutionContext and call with correct signature
-            from services.tool_contracts import ToolExecutionContext
 
-            execution_context = ToolExecutionContext(
-                user_context=user_context,
-                tool_outputs={},
-                conversation_state={}
-            )
+        # Create execution context with any previously resolved outputs
+        from services.tool_contracts import ToolExecutionContext
 
-            exec_result = await self.executor.execute(tool, parameters, execution_context)
-        except Exception as e:
-            logger.error(f"❌ Tool execution exception: {e}", exc_info=True)
-            return {
-                "success": False,
-                "data": {"error": str(e)},
-                "error": str(e),
-                "ai_feedback": (
-                    f"Technical error during {tool_name} execution: {str(e)}. "
-                    f"This may be a system issue. Try a different approach or ask user to rephrase."
-                ),
-                "final_response": (
-                    f"⚠️ Izvinjavam se, došlo je do tehničkog problema.\n"
-                    f"Možete li pokušati drugačije formulirati zahtjev?"
+        tool_outputs = conv_manager.context.tool_outputs if hasattr(conv_manager.context, 'tool_outputs') else {}
+
+        execution_context = ToolExecutionContext(
+            user_context=user_context,
+            tool_outputs=tool_outputs,
+            conversation_state={}
+        )
+
+        # Execute tool
+        exec_result = await self.executor.execute(tool, parameters, execution_context)
+
+        # CHECK FOR MISSING PARAMETER ERROR - THIS IS WHERE CHAINING HAPPENS!
+        if not exec_result.success and exec_result.error_code == "PARAMETER_VALIDATION_ERROR":
+            # KRITIČAN FIX: Koristi missing_params direktno umjesto parsiranja teksta
+            missing_param = None
+            if exec_result.missing_params:
+                missing_param = exec_result.missing_params[0]
+            else:
+                # Fallback na parsing ako missing_params nije popunjen
+                missing_param = self._extract_missing_param_from_error(exec_result.error_message)
+
+            if missing_param and chain_depth < MAX_CHAIN_DEPTH:
+                logger.info(f"🔗 Attempting auto-chain for missing param: {missing_param}")
+
+                # Try to find a value in parameters that could be resolved
+                user_value = self._find_resolvable_value(parameters, missing_param)
+
+                # Attempt automatic resolution
+                resolution = await self.dependency_resolver.resolve_dependency(
+                    missing_param=missing_param,
+                    user_value=user_value,
+                    user_context=user_context,
+                    executor=self.executor
                 )
-            }
 
-        # CRITICAL FIX: exec_result is ToolExecutionResult (Pydantic), not dict
+                if resolution.success:
+                    # Add resolved value to parameters
+                    parameters[missing_param] = resolution.resolved_value
+                    logger.info(
+                        f"✅ Auto-resolved {missing_param} = {resolution.resolved_value} "
+                        f"via {resolution.provider_tool}"
+                    )
+
+                    # Store in tool_outputs for future use
+                    if hasattr(conv_manager.context, 'tool_outputs'):
+                        conv_manager.context.tool_outputs[missing_param] = resolution.resolved_value
+                    await conv_manager.save()
+
+                    # Retry execution with resolved parameter
+                    return await self._execute_tool_call(
+                        result={"tool": tool_name, "parameters": parameters, "tool_call_id": result.get("tool_call_id")},
+                        user_context=user_context,
+                        conv_manager=conv_manager,
+                        sender=sender,
+                        chain_depth=chain_depth + 1
+                    )
+                else:
+                    logger.warning(f"❌ Auto-resolution failed: {resolution.error_message}")
+                    # Fall through to return the original error
+
+        # Handle execution result
         if exec_result.success:
             # Convert to dict for formatter compatibility
             result_dict = {
@@ -434,15 +488,50 @@ class MessageEngine:
                 "operation": tool_name
             }
             response = self.formatter.format_result(result_dict, tool)
+
+            # Store successful output values for future chaining
+            if exec_result.output_values:
+                conv_manager.context.tool_outputs.update(exec_result.output_values)
+                await conv_manager.save()
+
             return {
                 "success": True,
                 "data": exec_result.data,
                 "final_response": response
             }
         else:
-            # Return error with AI feedback for self-correction
+            # ERROR LEARNING: Record error for future correction
             error = exec_result.error_message or "Nepoznata greška"
+            error_code = exec_result.error_code or "UNKNOWN"
+
+            await self.error_learning.record_error(
+                error_code=error_code,
+                operation_id=tool_name,
+                error_message=error,
+                context={
+                    "parameters": list(parameters.keys()),
+                    "user_id": user_context.get("person_id"),
+                    "chain_depth": chain_depth
+                },
+                was_corrected=False
+            )
+
+            # ERROR LEARNING: Try to suggest correction
+            correction = await self.error_learning.suggest_correction(
+                error_code=error_code,
+                operation_id=tool_name,
+                error_message=error,
+                current_params=parameters
+            )
+
             ai_feedback = exec_result.ai_feedback or error
+
+            # If we have a correction suggestion, add it to feedback
+            if correction:
+                correction_hint = correction.get("action", {}).get("hint", "")
+                if correction_hint:
+                    ai_feedback = f"{ai_feedback}. Sugestija: {correction_hint}"
+                    logger.info(f"💡 Error correction suggested: {correction_hint}")
 
             # Provide human-readable error feedback to user
             human_error = self._translate_error_for_user(error, tool_name)
@@ -564,6 +653,99 @@ class MessageEngine:
         """Check if tool requires confirmation."""
         confirm_patterns = ["calendar", "booking", "case", "delete", "create", "update"]
         return any(p in tool_name.lower() for p in confirm_patterns)
+
+    def _extract_missing_param_from_error(self, error_message: str) -> Optional[str]:
+        """
+        Extract missing parameter name from validation error.
+
+        KRITIČNO za auto-chaining: Prepoznaje koji parametar nedostaje
+        iz poruke greške.
+
+        Args:
+            error_message: Error message from ParameterValidationError
+
+        Returns:
+            Parameter name or None
+        """
+        if not error_message:
+            return None
+
+        import re
+
+        # Pattern 1: "Nedostaju obavezni parametri: VehicleId"
+        match = re.search(r'parametri?:\s*(\w+)', error_message, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+        # Pattern 2: "Molim unesite vehicle id:"
+        match = re.search(r'unesite\s+(\w+(?:\s+\w+)?)\s*:', error_message, re.IGNORECASE)
+        if match:
+            # Convert "vehicle id" to "VehicleId"
+            parts = match.group(1).split()
+            return ''.join(word.capitalize() for word in parts)
+
+        # Pattern 3: Look for common ID patterns
+        id_patterns = ['VehicleId', 'PersonId', 'BookingId', 'LocationId', 'DriverId']
+        for pattern in id_patterns:
+            if pattern.lower() in error_message.lower():
+                return pattern
+
+        # Pattern 4: "Koje vozilo?" → VehicleId
+        if 'vozilo' in error_message.lower():
+            return 'VehicleId'
+        if 'osoba' in error_message.lower() or 'vozač' in error_message.lower():
+            return 'PersonId'
+
+        return None
+
+    def _find_resolvable_value(
+        self,
+        parameters: Dict[str, Any],
+        missing_param: str
+    ) -> Optional[str]:
+        """
+        Find a user-provided value that could be used to resolve missing param.
+
+        KRITIČNO: Pronalazi registraciju, ime vozila, etc. iz parametara
+        koje je korisnik dao, da bi se mogla napraviti auto-resolucija.
+
+        Primjer:
+            parameters = {"VehicleName": "ZG-1234-AB", "FromTime": "..."}
+            missing_param = "VehicleId"
+            → Vraća "ZG-1234-AB" jer to izgleda kao registracija
+
+        Args:
+            parameters: Parameters from LLM
+            missing_param: Name of missing parameter
+
+        Returns:
+            Value that could be resolved, or None
+        """
+        missing_lower = missing_param.lower()
+
+        # If missing VehicleId, look for vehicle-related values
+        if 'vehicle' in missing_lower:
+            for key, value in parameters.items():
+                if not value or not isinstance(value, str):
+                    continue
+                key_lower = key.lower()
+                # Look for plate-like values
+                if any(x in key_lower for x in ['plate', 'registration', 'name', 'vehicle']):
+                    return value
+                # Check if value looks like a license plate
+                if self.dependency_resolver.detect_value_type(value):
+                    return value
+
+        # If missing PersonId, look for person-related values
+        if 'person' in missing_lower or 'driver' in missing_lower:
+            for key, value in parameters.items():
+                if not value or not isinstance(value, str):
+                    continue
+                key_lower = key.lower()
+                if any(x in key_lower for x in ['email', 'phone', 'name', 'person', 'driver']):
+                    return value
+
+        return None
 
     def _translate_error_for_user(self, error: str, tool_name: str) -> str:
         """

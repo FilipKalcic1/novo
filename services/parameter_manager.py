@@ -611,11 +611,67 @@ class ParameterManager:
         """
         Suggest tools that can provide missing parameters.
 
-        This is a placeholder - actual implementation requires
-        access to tool registry dependency graph.
+        POPRAVAK: Implementacija umjesto placeholder-a.
+
+        Koristi semantičko mapiranje za pronalazak provider alata.
+        Ne ovisi o registry-ju jer ParameterManager nema pristup.
+
+        Args:
+            tool: Tool that needs parameters
+            missing_params: List of missing parameter names
+
+        Returns:
+            List of suggested provider tool patterns (za AI feedback)
         """
-        # TODO: Query registry for tools with matching output_keys
-        return []
+        suggestions = []
+
+        # Mapping: parameter type → suggested tool patterns
+        PROVIDER_PATTERNS: Dict[str, List[str]] = {
+            # Vehicle-related
+            'vehicleid': ['get_Vehicles', 'get_MasterData', 'get_AvailableVehicles'],
+            'vehicle': ['get_Vehicles', 'get_MasterData'],
+            'licenceplate': ['get_Vehicles', 'get_MasterData'],
+
+            # Person-related
+            'personid': ['get_Persons', 'get_Drivers', 'get_Users'],
+            'driverid': ['get_Drivers', 'get_Persons'],
+            'userid': ['get_Users', 'get_Persons'],
+
+            # Booking-related
+            'bookingid': ['get_VehicleCalendar', 'get_Bookings'],
+            'reservationid': ['get_VehicleCalendar', 'get_Reservations'],
+
+            # Location-related
+            'locationid': ['get_Locations', 'get_Sites'],
+            'siteid': ['get_Sites', 'get_Locations'],
+
+            # Case-related
+            'caseid': ['get_Cases', 'get_ServiceCases'],
+        }
+
+        for param in missing_params:
+            param_lower = param.lower()
+
+            # Direct match
+            if param_lower in PROVIDER_PATTERNS:
+                suggestions.extend(PROVIDER_PATTERNS[param_lower])
+                continue
+
+            # Partial match (e.g., "VehicleId" matches "vehicleid")
+            for pattern_key, providers in PROVIDER_PATTERNS.items():
+                if pattern_key in param_lower or param_lower in pattern_key:
+                    suggestions.extend(providers)
+                    break
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_suggestions = []
+        for s in suggestions:
+            if s not in seen:
+                seen.add(s)
+                unique_suggestions.append(s)
+
+        return unique_suggestions[:5]  # Max 5 suggestions
 
     def _get_parameter_question(
         self,
