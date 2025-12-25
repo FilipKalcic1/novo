@@ -1,14 +1,20 @@
 """
 Message Engine
-Version: 12.0
+Version: 13.0
 
 Main message processing orchestrator.
 
-CRITICAL FIXES:
+v13.0 CHANGES:
+- Integrated APICapabilityRegistry for dynamic PersonId injection
+- Integrated ErrorTranslator for unified error handling
+- Removed hardcoded lists (exclusions, supported_tools)
+- Added learning from API responses
+
+PREVIOUS FIXES:
 1. Uses Redis-backed ConversationManager (survives restarts)
 2. Passes error feedback to AI for self-correction
 3. Better tool execution loop with error recovery
-4. NEW v12.0: Entity Pre-Resolution for "Vozilo 1", "moje vozilo" references
+4. Entity Pre-Resolution for "Vozilo 1", "moje vozilo" references
 """
 
 import json
@@ -23,6 +29,9 @@ from services.response_formatter import ResponseFormatter
 from services.user_service import UserService
 from services.dependency_resolver import DependencyResolver
 from services.error_learning import ErrorLearningService
+from services.api_capabilities import APICapabilityRegistry, get_capability_registry
+from services.error_translator import get_error_translator
+from services.tool_evaluator import get_tool_evaluator
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -267,6 +276,10 @@ class MessageEngine:
             text, top_k=5
         )
 
+        # CRITICAL FIX v13.1: Sort tools by score BEFORE sending to AI
+        # AI tends to pick from first few tools, so best match must be first
+        tools_with_scores = sorted(tools_with_scores, key=lambda t: t["score"], reverse=True)
+
         # Extract tools and determine if forced execution is needed
         tools = [t["schema"] for t in tools_with_scores]
         forced_tool = None
@@ -304,11 +317,13 @@ class MessageEngine:
             # Pass forced_tool on first iteration only (subsequent iterations are corrections)
             current_forced = forced_tool if iteration == 0 else None
 
+            # NEW v12.0: Pass tool scores for token budgeting
             result = await self.ai.analyze(
                 messages=current_messages,
                 tools=tools,
                 system_prompt=system_prompt,
-                forced_tool=current_forced
+                forced_tool=current_forced,
+                tool_scores=tools_with_scores  # Enable dynamic tool trimming
             )
             
             if result.get("type") == "error":
@@ -440,6 +455,10 @@ class MessageEngine:
             conversation_state={}
         )
 
+        # CRITICAL FIX v12.3: Auto-inject PersonId filter for GET tools that return lists
+        # This ensures user only sees THEIR data, not entire tenant's data
+        parameters = self._inject_person_filter(tool, parameters, user_context)
+
         # Execute tool
         exec_result = await self.executor.execute(tool, parameters, execution_context)
 
@@ -507,6 +526,15 @@ class MessageEngine:
                 conv_manager.context.tool_outputs.update(exec_result.output_values)
                 await conv_manager.save()
 
+            # v13.0: LEARNING - Record successful API call for capability discovery
+            capability_registry = get_capability_registry()
+            if capability_registry:
+                capability_registry.record_success(tool_name, parameters)
+
+            # v13.0: EVALUATION - Record success for tool scoring
+            evaluator = get_tool_evaluator()
+            evaluator.record_success(tool_name, params_used=parameters)
+
             return {
                 "success": True,
                 "data": exec_result.data,
@@ -516,6 +544,16 @@ class MessageEngine:
             # ERROR LEARNING: Record error for future correction
             error = exec_result.error_message or "Nepoznata greška"
             error_code = exec_result.error_code or "UNKNOWN"
+
+            # v13.0: LEARNING - Record failure for capability discovery
+            # This teaches the system which endpoints don't support which filters
+            capability_registry = get_capability_registry()
+            if capability_registry:
+                capability_registry.record_failure(tool_name, error, parameters)
+
+            # v13.0: EVALUATION - Record failure for tool scoring
+            evaluator = get_tool_evaluator()
+            evaluator.record_failure(tool_name, error, error_type=error_code, params_used=parameters)
 
             await self.error_learning.record_error(
                 error_code=error_code,
@@ -537,7 +575,9 @@ class MessageEngine:
                 current_params=parameters
             )
 
-            ai_feedback = exec_result.ai_feedback or error
+            # v13.0: Get AI feedback from error translator
+            translator = get_error_translator()
+            ai_feedback = translator.get_ai_feedback(error, tool_name)
 
             # If we have a correction suggestion, add it to feedback
             if correction:
@@ -546,8 +586,16 @@ class MessageEngine:
                     ai_feedback = f"{ai_feedback}. Sugestija: {correction_hint}"
                     logger.info(f"💡 Error correction suggested: {correction_hint}")
 
+            # FIX v13.2: Include HTTP status code in error for better translation
+            # ErrorTranslator patterns check for "403", "404" etc in error string
+            http_status = exec_result.http_status
+            if http_status and http_status >= 400:
+                error_with_status = f"HTTP {http_status}: {error}"
+            else:
+                error_with_status = error
+
             # Provide human-readable error feedback to user
-            human_error = self._translate_error_for_user(error, tool_name)
+            human_error = self._translate_error_for_user(error_with_status, tool_name)
 
             return {
                 "success": False,
@@ -564,7 +612,15 @@ class MessageEngine:
         user_context: Dict[str, Any],
         conv_manager: ConversationManager
     ) -> Dict[str, Any]:
-        """Handle vehicle availability check."""
+        """
+        Handle vehicle availability check.
+
+        v13.0 BOOKING FLOW:
+        1. Execute get_AvailableVehicles
+        2. If no vehicles → suggest different time
+        3. If vehicles found → show FIRST vehicle and ask for confirmation
+        4. Store selection for post_VehicleCalendar
+        """
         # CRITICAL FIX: Get tool object and create proper execution context
         tool = self.registry.get_tool(tool_name)
         if not tool:
@@ -592,30 +648,90 @@ class MessageEngine:
                 "final_response": f"❌ Greška: {result.error_message}"
             }
 
-        # Extract items from result.data
-        items = result.data.get("items", []) if isinstance(result.data, dict) else []
-        
+        # Extract items from result.data - handle various response formats
+        items = []
+        if isinstance(result.data, dict):
+            # Try different possible keys
+            items = result.data.get("items", [])
+            if not items:
+                items = result.data.get("Data", [])
+            if not items and "data" in result.data:
+                nested = result.data["data"]
+                if isinstance(nested, dict):
+                    items = nested.get("Data", [])
+                elif isinstance(nested, list):
+                    items = nested
+
         if not items:
             return {
                 "success": True,
-                "data": result,
+                "data": result.data,
                 "final_response": (
-                    "Nažalost, nema slobodnih vozila za odabrani period.\n"
-                    "Možete li odabrati drugi termin?"
+                    "🚗 Nažalost, nema slobodnih vozila za odabrani period.\n\n"
+                    "Možete li odabrati drugi termin? Na primjer:\n"
+                    "• 'Sutra od 8 do 17'\n"
+                    "• 'Sljedeći tjedan od ponedjeljka do srijede'"
                 )
             }
-        
-        # Store for selection
+
+        # v13.0: SIMPLIFIED FLOW - Show first available vehicle
+        first_vehicle = items[0]
+
+        # Extract vehicle info
+        vehicle_name = (
+            first_vehicle.get("FullVehicleName") or
+            first_vehicle.get("DisplayName") or
+            first_vehicle.get("Name") or
+            "Vozilo"
+        )
+        plate = (
+            first_vehicle.get("LicencePlate") or
+            first_vehicle.get("Plate") or
+            first_vehicle.get("RegistrationNumber") or
+            "N/A"
+        )
+        vehicle_id = first_vehicle.get("Id") or first_vehicle.get("VehicleId")
+
+        # Store for confirmation step
         await conv_manager.set_displayed_items(items)
         await conv_manager.add_parameters(parameters)
-        
-        response = self.formatter.format_vehicle_list(items)
-        
+
+        # Pre-select first vehicle
+        await conv_manager.select_item(first_vehicle)
+
+        # Store vehicle ID in tool outputs for chaining
+        if hasattr(conv_manager.context, 'tool_outputs'):
+            conv_manager.context.tool_outputs["VehicleId"] = vehicle_id
+            conv_manager.context.tool_outputs["vehicleId"] = vehicle_id
+
+        # Set up for confirmation
+        conv_manager.context.current_tool = "post_VehicleCalendar"
+
+        # Format time for display
+        from_time = parameters.get("from") or parameters.get("FromTime", "N/A")
+        to_time = parameters.get("to") or parameters.get("ToTime", "N/A")
+
+        # Build confirmation message
+        message = (
+            f"🚗 **Pronašao sam slobodno vozilo:**\n\n"
+            f"**{vehicle_name}** ({plate})\n\n"
+            f"📅 Period: {from_time} → {to_time}\n\n"
+        )
+
+        if len(items) > 1:
+            message += f"_(Ima još {len(items) - 1} slobodnih vozila)_\n\n"
+
+        message += "**Želite li potvrditi rezervaciju?** (Da/Ne)"
+
+        # Set state to CONFIRMING
+        await conv_manager.request_confirmation(message)
+        await conv_manager.save()
+
         return {
             "success": True,
-            "data": result,
+            "data": result.data,
             "needs_input": True,
-            "prompt": response
+            "prompt": message
         }
     
     async def _request_confirmation(
@@ -662,6 +778,85 @@ class MessageEngine:
             "prompt": message
         }
     
+    def _inject_person_filter(
+        self,
+        tool: "UnifiedToolDefinition",
+        parameters: Dict[str, Any],
+        user_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        DYNAMIC PersonId injection using APICapabilityRegistry.
+
+        v13.0: Replaces hardcoded exclusion/inclusion lists with
+        dynamic capability detection from Swagger metadata + runtime learning.
+
+        The system LEARNS which endpoints support PersonId:
+        - From Swagger: if tool has 'personId' parameter → NATIVE support
+        - From runtime: if API returns "Unknown filter field" → NOT supported
+
+        Args:
+            tool: Tool definition
+            parameters: Parameters from AI
+            user_context: User context with person_id
+
+        Returns:
+            Modified parameters with PersonId filter injected (only if supported)
+        """
+        # Only for GET methods
+        if tool.method != "GET":
+            return parameters
+
+        # Get person_id from context
+        person_id = user_context.get("person_id")
+        if not person_id:
+            logger.debug("No person_id in user_context")
+            return parameters
+
+        # Check if already has PersonId in parameters
+        param_keys_lower = [k.lower() for k in parameters.keys()]
+        if "personid" in param_keys_lower or "driverid" in param_keys_lower:
+            logger.debug("PersonId already in parameters")
+            return parameters
+
+        # Use dynamic capability registry
+        capability_registry = get_capability_registry()
+
+        if capability_registry:
+            # DYNAMIC: Use discovered capabilities
+            should_inject, param_name, method = capability_registry.should_inject_person_id(
+                tool.operation_id, person_id
+            )
+
+            if should_inject and param_name:
+                modified_params = parameters.copy()
+
+                if method == "native":
+                    modified_params[param_name] = person_id
+                    logger.info(f"🎯 DYNAMIC INJECT: {param_name}={person_id} for {tool.operation_id}")
+                elif method == "filter":
+                    existing_filter = modified_params.get("Filter", "")
+                    if existing_filter:
+                        modified_params["Filter"] = f"{existing_filter};PersonId(=){person_id}"
+                    else:
+                        modified_params["Filter"] = f"PersonId(=){person_id}"
+                    logger.info(f"🎯 DYNAMIC FILTER: PersonId={person_id} for {tool.operation_id}")
+
+                return modified_params
+            else:
+                logger.debug(f"Capability registry: {tool.operation_id} doesn't support PersonId injection")
+                return parameters
+
+        # Fallback: If capability registry not initialized, use Swagger-based detection
+        # This is a simplified version that looks at tool parameters directly
+        for param_name in ["personId", "PersonId", "driverId", "DriverId", "AssignedToId"]:
+            if param_name in tool.parameters:
+                modified_params = parameters.copy()
+                modified_params[param_name] = person_id
+                logger.info(f"🎯 FALLBACK INJECT: {param_name}={person_id} for {tool.operation_id}")
+                return modified_params
+
+        return parameters
+
     def _requires_confirmation(self, tool_name: str) -> bool:
         """Check if tool requires confirmation."""
         confirm_patterns = ["calendar", "booking", "case", "delete", "create", "update"]
@@ -831,9 +1026,15 @@ class MessageEngine:
 
         return resolved
 
+
     def _translate_error_for_user(self, error: str, tool_name: str) -> str:
         """
         Translate technical error to human-readable Croatian message.
+
+        v13.0: Delegated to ErrorTranslator service for:
+        - Pattern-based error detection (no hardcoded if/else)
+        - Context-aware messages
+        - Learning from errors
 
         Args:
             error: Technical error message
@@ -842,45 +1043,8 @@ class MessageEngine:
         Returns:
             Human-readable error message in Croatian
         """
-        error_lower = error.lower()
-
-        # Common error patterns
-        if "not found" in error_lower or "404" in error_lower:
-            return (
-                f"❌ Traženi resurs nije pronađen.\n"
-                f"Možete li ponoviti zahtjev sa drugim parametrima?"
-            )
-
-        if "permission" in error_lower or "403" in error_lower or "unauthorized" in error_lower:
-            return (
-                f"❌ Nemate dozvolu za ovu operaciju.\n"
-                f"Kontaktirajte administratora ako mislite da je ovo greška."
-            )
-
-        if "timeout" in error_lower or "timed out" in error_lower:
-            return (
-                f"⏱️ Zahtjev je istekao.\n"
-                f"Molim pokušajte ponovno za trenutak."
-            )
-
-        if "connection" in error_lower or "network" in error_lower:
-            return (
-                f"🌐 Problem s mrežom.\n"
-                f"Molim pokušajte ponovno."
-            )
-
-        if "validation" in error_lower or "invalid" in error_lower:
-            return (
-                f"⚠️ Nevažeći podaci.\n"
-                f"Provjerite unesene informacije i pokušajte ponovno."
-            )
-
-        # Generic error with tool name context
-        return (
-            f"❌ Došlo je do greške kod operacije '{tool_name}'.\n"
-            f"Detalji: {error}\n\n"
-            f"Pokušajte reformulirati zahtjev ili kontaktirajte podršku."
-        )
+        translator = get_error_translator()
+        return translator.get_user_message(error, tool_name)
     
     async def _handle_selection(
         self,
@@ -932,34 +1096,79 @@ class MessageEngine:
         user_context: Dict[str, Any],
         conv_manager: ConversationManager
     ) -> str:
-        """Handle confirmation response."""
+        """
+        Handle confirmation response.
+
+        v13.0 BOOKING FLOW:
+        When user confirms, build proper payload for post_VehicleCalendar:
+        - AssignedToId: user's PersonId
+        - VehicleId: selected vehicle ID
+        - FromTime/ToTime: booking period
+        - AssigneeType: 1 (Person)
+        - EntryType: 0 (Booking)
+        """
         confirmation = conv_manager.parse_confirmation(text)
-        
+
         if confirmation is None:
             return "Molim potvrdite s 'Da' ili odustanite s 'Ne'."
-        
+
         if not confirmation:
             await conv_manager.cancel()
-            return "✅ Operacija otkazana. Kako vam još mogu pomoći?"
-        
+            return "✅ Rezervacija otkazana. Kako vam još mogu pomoći?"
+
         # Execute the confirmed operation
         await conv_manager.confirm()
-        
+
         tool_name = conv_manager.get_current_tool()
         params = conv_manager.get_parameters()
         selected = conv_manager.get_selected_item()
-        
-        # Add selected item data
-        if selected:
-            vehicle_id = selected.get("Id") or selected.get("VehicleId")
-            if vehicle_id:
-                params["VehicleId"] = vehicle_id
-        
-        # Normalize time params
-        if "from" in params and "FromTime" not in params:
-            params["FromTime"] = params.pop("from")
-        if "to" in params and "ToTime" not in params:
-            params["ToTime"] = params.pop("to")
+
+        # v13.0: Build proper booking payload
+        if tool_name == "post_VehicleCalendar":
+            # Get VehicleId from selected item or tool_outputs
+            vehicle_id = None
+            if selected:
+                vehicle_id = selected.get("Id") or selected.get("VehicleId")
+            if not vehicle_id and hasattr(conv_manager.context, 'tool_outputs'):
+                vehicle_id = conv_manager.context.tool_outputs.get("VehicleId")
+
+            if not vehicle_id:
+                await conv_manager.reset()
+                return "❌ Greška: Nije odabrano vozilo. Pokušajte ponovno."
+
+            # Normalize time params
+            from_time = params.get("from") or params.get("FromTime")
+            to_time = params.get("to") or params.get("ToTime")
+
+            if not from_time or not to_time:
+                await conv_manager.reset()
+                return "❌ Greška: Nedostaje vrijeme rezervacije. Pokušajte ponovno."
+
+            # Build booking payload according to API spec
+            booking_params = {
+                "AssignedToId": user_context.get("person_id"),
+                "VehicleId": vehicle_id,
+                "FromTime": from_time,
+                "ToTime": to_time,
+                "AssigneeType": 1,  # Person
+                "EntryType": 0,     # Booking
+                "Description": params.get("Description") or params.get("description") or None
+            }
+
+            params = booking_params
+            logger.info(f"📅 Booking payload: VehicleId={vehicle_id[:8]}..., From={from_time}, To={to_time}")
+        else:
+            # Generic confirmation flow
+            if selected:
+                vehicle_id = selected.get("Id") or selected.get("VehicleId")
+                if vehicle_id:
+                    params["VehicleId"] = vehicle_id
+
+            # Normalize time params
+            if "from" in params and "FromTime" not in params:
+                params["FromTime"] = params.pop("from")
+            if "to" in params and "ToTime" not in params:
+                params["ToTime"] = params.pop("to")
 
         # CRITICAL FIX: Get tool object and create proper execution context
         tool = self.registry.get_tool(tool_name)
@@ -970,20 +1179,41 @@ class MessageEngine:
         from services.tool_contracts import ToolExecutionContext
         execution_context = ToolExecutionContext(
             user_context=user_context,
-            tool_outputs={},
+            tool_outputs=conv_manager.context.tool_outputs if hasattr(conv_manager.context, 'tool_outputs') else {},
             conversation_state={}
         )
 
         # Execute
         result = await self.executor.execute(tool, params, execution_context)
-        
+
         # Complete flow
         await conv_manager.complete()
         await conv_manager.reset()
 
         # CRITICAL FIX: result is ToolExecutionResult (Pydantic), not dict
         if result.success:
-            # Extract created_id from result.data if available
+            # v13.0: Better success message for booking
+            if tool_name == "post_VehicleCalendar":
+                vehicle_name = ""
+                if selected:
+                    vehicle_name = (
+                        selected.get("FullVehicleName") or
+                        selected.get("DisplayName") or
+                        selected.get("Name") or
+                        ""
+                    )
+                    plate = selected.get("LicencePlate") or selected.get("Plate") or ""
+                    if plate:
+                        vehicle_name = f"{vehicle_name} ({plate})"
+
+                return (
+                    f"✅ **Rezervacija uspješna!**\n\n"
+                    f"🚗 Vozilo: {vehicle_name}\n"
+                    f"📅 Period: {params.get('FromTime')} → {params.get('ToTime')}\n\n"
+                    f"Sretno na putu! 🛣️"
+                )
+
+            # Generic success
             created_id = ""
             if isinstance(result.data, dict):
                 created_id = result.data.get("created_id", "") or result.data.get("Id", "")
@@ -995,7 +1225,8 @@ class MessageEngine:
             )
         else:
             error = result.error_message or "Nepoznata greška"
-            return f"❌ Greška: {error}"
+            human_error = self._translate_error_for_user(error, tool_name)
+            return human_error
     
     async def _handle_gathering(
         self,
@@ -1041,3 +1272,5 @@ class MessageEngine:
             lines.append(f"• {prompts.get(param, param)}")
         
         return "\n".join(lines)
+
+

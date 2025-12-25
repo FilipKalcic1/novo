@@ -86,8 +86,9 @@ class Settings(BaseSettings):
 
     # ACTION-FIRST PROTOCOL: Force tool call when similarity >= this threshold
     # MASTER PROMPT v9.0: Bot MUST execute tool_call, NOT generic text response
+    # v13.1: LOWERED from 0.85 to 0.75 - AI was ignoring our best matches!
     ACTION_THRESHOLD: float = Field(
-        default=0.85,
+        default=0.75,
         description="Similarity threshold for forced tool execution (no text fallback)"
     )
     

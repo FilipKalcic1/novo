@@ -115,43 +115,30 @@ class DependencyResolver:
         # English possessives
         (r'my\s+vehicle', 'vehicle'),
         (r'my\s+car', 'vehicle'),
-        # Implicit possessive (just "vozilo" in context of user's data)
-        (r'^vozilo$', 'vehicle'),
-        (r'^auto$', 'vehicle'),
+        # NOTE: Implicit possessive patterns (just "vozilo" or "auto") are
+        # intentionally NOT included because they are too aggressive and
+        # could match unintended queries like "Koje vozilo je dostupno?"
     ]
 
-    # Common vehicle name patterns (brands, models)
-    VEHICLE_NAME_PATTERNS: List[str] = [
-        # VW
-        r'golf', r'passat', r'polo', r'tiguan', r'touran', r'caddy', r'transporter', r't-roc', r'arteon',
-        # Škoda
-        r'octavia', r'fabia', r'superb', r'kodiaq', r'karoq', r'scala', r'kamiq',
-        # Audi
-        r'a3', r'a4', r'a5', r'a6', r'a7', r'a8', r'q3', r'q5', r'q7', r'q8',
-        # BMW
-        r'serija\s*[1-8]', r'x[1-7]', r'z4', r'i[34x]',
-        # Mercedes
-        r'a\s*klasa', r'b\s*klasa', r'c\s*klasa', r'e\s*klasa', r's\s*klasa', r'gle', r'glc', r'gla',
-        # Renault
-        r'megane', r'clio', r'captur', r'kadjar', r'scenic', r'kangoo', r'master', r'trafic',
-        # Ford
-        r'focus', r'fiesta', r'mondeo', r'kuga', r'puma', r'transit',
-        # Opel
-        r'astra', r'corsa', r'insignia', r'mokka', r'crossland', r'grandland',
-        # Toyota
-        r'yaris', r'corolla', r'rav4', r'c-hr', r'aygo', r'camry', r'proace',
-        # Peugeot
-        r'208', r'308', r'508', r'2008', r'3008', r'5008', r'partner', r'expert',
-        # Citroen
-        r'c3', r'c4', r'c5', r'berlingo', r'jumpy', r'jumper',
-        # Fiat
-        r'tipo', r'500', r'panda', r'punto', r'doblo', r'ducato',
-        # Hyundai/Kia
-        r'i10', r'i20', r'i30', r'tucson', r'kona', r'santa\s*fe',
-        r'ceed', r'sportage', r'niro', r'stonic', r'xceed',
-        # Dacia
-        r'duster', r'sandero', r'logan', r'dokker', r'spring',
-    ]
+    # NOTE: Vehicle name patterns are intentionally REMOVED
+    #
+    # RAZLOG: Hardkodirana lista brendova/modela je anti-pattern jer:
+    # 1. Ne može pokriti sve brendove (Tesla, Rimac, Nio, BYD, etc.)
+    # 2. Ne ažurira se automatski
+    # 3. Može dati false positives (npr. "Golf" kao sport)
+    #
+    # RJEŠENJE: Umjesto hardkodirane liste, sustav koristi:
+    # 1. Ordinal reference ("Vozilo 1") - funkcionira za SVA vozila
+    # 2. Possessive reference ("moje vozilo") - funkcionira za SVA vozila
+    # 3. Fuzzy match u _fuzzy_match_vehicle() - pretražuje STVARNE podatke
+    #
+    # Ako korisnik kaže "Golf", sustav će:
+    # - NE prepoznati kao entity reference (nema hardkodiranu listu)
+    # - ALI _fuzzy_match_vehicle() će pronaći vozilo s "Golf" u imenu
+    #   kada se pozove preko ordinal/possessive resolutionu
+    #
+    # Ovo je ROBUSNIJI pristup jer radi s bilo kojim vozilom u bazi.
+    VEHICLE_NAME_PATTERNS: List[str] = []  # Intentionally empty - use fuzzy match instead
 
     # Patterns for recognizing human-readable values
     # Format: (regex, target_param, filter_field, description)
@@ -419,13 +406,29 @@ class DependencyResolver:
                 # Try as generic search/name filter
                 provider_params = {'Filter': f"Name(~){user_value}"}
 
-        # Add context params that provider might need
-        if 'person_id' in user_context:
-            # Some tools filter by person
-            for param_name in ['PersonId', 'personId', 'DriverId', 'driverId']:
+        # CRITICAL FIX v12.2: ALWAYS inject PersonId for user-specific data
+        person_id = user_context.get('person_id')
+        if person_id:
+            person_param_injected = False
+            # Try to inject PersonId as direct parameter
+            for param_name in ['PersonId', 'personId', 'DriverId', 'driverId', 'AssignedToId', 'assignedToId']:
                 if param_name.lower() in [p.lower() for p in provider_tool.parameters.keys()]:
-                    provider_params[param_name] = user_context['person_id']
+                    provider_params[param_name] = person_id
+                    person_param_injected = True
+                    logger.info(f"🎯 Dependency resolution: filtering by {param_name}={person_id}")
                     break
+
+            # If no direct param match but Filter exists, add to Filter
+            if not person_param_injected and 'Filter' in provider_tool.parameters:
+                existing_filter = provider_params.get('Filter', '')
+                if existing_filter:
+                    # Combine with existing filter using semicolon
+                    provider_params['Filter'] = f"{existing_filter};PersonId(=){person_id}"
+                else:
+                    provider_params['Filter'] = f"PersonId(=){person_id}"
+                logger.info(f"🎯 Added PersonId filter to dependency resolution")
+        else:
+            logger.warning("⚠️ No person_id in user_context for dependency resolution")
 
         # Execute provider tool
         try:
@@ -594,8 +597,14 @@ class DependencyResolver:
             match = re.search(pattern, text_lower, re.IGNORECASE)
             if match:
                 ordinal = int(match.group(1))
+
+                # Validate ordinal is positive (1-indexed user input)
+                if ordinal < 1:
+                    logger.debug(f"Invalid ordinal {ordinal} - skipping")
+                    continue
+
                 # Convert 1-indexed to 0-indexed
-                ordinal_index = ordinal - 1 if ordinal > 0 else 0
+                ordinal_index = ordinal - 1
 
                 logger.info(
                     f"🔢 Detected ordinal reference: '{text}' → "
@@ -733,16 +742,15 @@ class DependencyResolver:
         Resolve ordinal reference ("Vozilo 1") by fetching user's vehicle list.
 
         Uses get_MasterData ili get_Vehicles s PersonId filterom.
+
+        CRITICAL FIX v12.2: ALWAYS filter by PersonId to get user-specific data,
+        not first result from tenant!
         """
         # Find provider tool for listing vehicles
+        # NOTE: We use ONLY semantic search via find_provider_tool()
+        # No hardcoded tool names like "masterdata" - the system should
+        # find the right tool based on output_keys and search_terms
         provider_tool_id = self.find_provider_tool("VehicleId")
-
-        if not provider_tool_id:
-            # Try to use get_MasterData as fallback
-            for tool_id in self.registry.tools.keys():
-                if "masterdata" in tool_id.lower():
-                    provider_tool_id = tool_id
-                    break
 
         if not provider_tool_id:
             return ResolutionResult(
@@ -757,15 +765,26 @@ class DependencyResolver:
                 error_message=f"Alat {provider_tool_id} nije dostupan"
             )
 
-        # Build params - filter by person if available
+        # CRITICAL FIX v12.2: ALWAYS filter by PersonId for user-specific data
         provider_params = {}
         person_id = user_context.get("person_id")
+
         if person_id:
-            # Try different param names
-            for param_name in ["PersonId", "personId", "DriverId", "driverId", "AssignedToId"]:
+            # Try different param names for PersonId injection
+            person_param_injected = False
+            for param_name in ["PersonId", "personId", "DriverId", "driverId", "AssignedToId", "assignedToId"]:
                 if param_name.lower() in [p.lower() for p in provider_tool.parameters.keys()]:
                     provider_params[param_name] = person_id
+                    person_param_injected = True
+                    logger.info(f"🎯 Filtering by {param_name}={person_id} for user-specific data")
                     break
+
+            # If no direct param match, try using Filter parameter
+            if not person_param_injected and "Filter" in provider_tool.parameters:
+                provider_params["Filter"] = f"PersonId(=){person_id}"
+                logger.info(f"🎯 Using Filter=PersonId(=){person_id} for user-specific data")
+        else:
+            logger.warning("⚠️ No person_id in user_context - may return tenant-wide data!")
 
         try:
             from services.tool_contracts import ToolExecutionContext
@@ -870,13 +889,8 @@ class DependencyResolver:
         Uses Filter parameter with name matching.
         """
         # Find provider tool
+        # NOTE: No hardcoded fallbacks - use only semantic search
         provider_tool_id = self.find_provider_tool("VehicleId")
-
-        if not provider_tool_id:
-            for tool_id in self.registry.tools.keys():
-                if "masterdata" in tool_id.lower():
-                    provider_tool_id = tool_id
-                    break
 
         if not provider_tool_id:
             return ResolutionResult(
@@ -893,17 +907,35 @@ class DependencyResolver:
 
         # Build filter for name search
         search_value = reference.value.strip()
-        provider_params = {
-            "Filter": f"Name(~){search_value}"
-        }
 
-        # Also add person filter if available
+        # CRITICAL FIX v12.2: Combine name search with PersonId filter
         person_id = user_context.get("person_id")
+
+        # Start with empty params
+        provider_params = {}
+
+        # Add PersonId filter FIRST (most important for user-specific data)
         if person_id:
-            for param_name in ["PersonId", "personId", "DriverId"]:
+            person_param_injected = False
+            for param_name in ["PersonId", "personId", "DriverId", "driverId", "AssignedToId"]:
                 if param_name.lower() in [p.lower() for p in provider_tool.parameters.keys()]:
                     provider_params[param_name] = person_id
+                    person_param_injected = True
+                    logger.info(f"🎯 Name search: filtering by {param_name}={person_id}")
                     break
+
+            # If no direct param, combine with Filter
+            if not person_param_injected and "Filter" in provider_tool.parameters:
+                # Combine PersonId and Name filter
+                provider_params["Filter"] = f"PersonId(=){person_id};Name(~){search_value}"
+                logger.info(f"🎯 Combined filter: PersonId + Name search")
+            else:
+                # Add name filter separately
+                provider_params["Filter"] = f"Name(~){search_value}"
+        else:
+            # No person_id - just search by name (may return tenant-wide results)
+            provider_params["Filter"] = f"Name(~){search_value}"
+            logger.warning("⚠️ No person_id - name search may return other users' data")
 
         try:
             from services.tool_contracts import ToolExecutionContext

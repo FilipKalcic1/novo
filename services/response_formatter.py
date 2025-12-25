@@ -15,14 +15,38 @@ logger = logging.getLogger(__name__)
 class ResponseFormatter:
     """
     Formats API responses for user display.
-    
+
     Features:
     - Dynamic formatting based on data type
     - Croatian language
     - Emoji support
     - List formatting
+    - FIX v13.2: Message length limits for WhatsApp
     """
-    
+
+    # FIX v13.2: WhatsApp message limits
+    MAX_MESSAGE_LENGTH = 3500  # Leave buffer for emojis/markdown
+    MAX_LIST_ITEMS = 5  # Reduced from 10 to prevent flooding
+    MAX_FIELD_VALUE_LENGTH = 80  # Truncate long field values
+
+    def _truncate_message(self, message: str) -> str:
+        """
+        FIX v13.2: Truncate message to WhatsApp limit.
+
+        Ensures messages don't exceed MAX_MESSAGE_LENGTH.
+        """
+        if len(message) <= self.MAX_MESSAGE_LENGTH:
+            return message
+
+        # Find last complete line before limit
+        truncated = message[:self.MAX_MESSAGE_LENGTH]
+        last_newline = truncated.rfind('\n')
+
+        if last_newline > self.MAX_MESSAGE_LENGTH - 500:
+            truncated = truncated[:last_newline]
+
+        return truncated + "\n\n_...poruka skraćena._"
+
     def format_result(
         self,
         result: Dict[str, Any],
@@ -77,6 +101,29 @@ class ResponseFormatter:
         if "data" in result:
             data = result["data"]
 
+            # CRITICAL FIX v12.2: Unwrap nested "Data" field from API responses
+            # API often returns: {"Data": [...], "Count": 10} inside result["data"]
+            if isinstance(data, dict) and "Data" in data:
+                nested_data = data["Data"]
+                count = data.get("Count", len(nested_data) if isinstance(nested_data, list) else 1)
+
+                if isinstance(nested_data, list):
+                    if not nested_data:
+                        return "Nema pronađenih rezultata."
+                    if self._is_vehicle(nested_data[0]):
+                        return self.format_vehicle_list(nested_data)
+                    elif self._is_person(nested_data[0]):
+                        return self._format_person_list(nested_data)
+                    elif self._is_masterdata(nested_data[0]):
+                        return self._format_masterdata(nested_data[0])
+                    return self._format_generic_list(nested_data, count)
+                elif isinstance(nested_data, dict):
+                    if self._is_masterdata(nested_data):
+                        return self._format_masterdata(nested_data)
+                    elif self._is_vehicle(nested_data):
+                        return self._format_vehicle_details(nested_data)
+                    return self._format_generic_object(nested_data)
+
             # CRITICAL FIX: Type guard - only check structure on dict/list, not primitives
             if isinstance(data, dict):
                 if self._is_vehicle(data):
@@ -87,16 +134,20 @@ class ResponseFormatter:
                     return self._format_generic_object(data)
             elif isinstance(data, list):
                 # List of items without "items" wrapper
-                if data and isinstance(data[0], dict):
+                if not data:
+                    return "Nema pronađenih rezultata."
+                if isinstance(data[0], dict):
                     if self._is_vehicle(data[0]):
                         return self.format_vehicle_list(data)
                     elif self._is_person(data[0]):
                         return self._format_person_list(data)
+                    elif self._is_masterdata(data[0]):
+                        return self._format_masterdata(data[0])
                 return self._format_generic_list(data, len(data))
             else:
                 # Primitive type (string, number, etc.)
                 return f"✅ Rezultat: {data}"
-        
+
         return "✅ Operacija uspješna."
     
     def _format_mutation(self, result: Dict, operation: str) -> str:
@@ -241,11 +292,30 @@ class ResponseFormatter:
     def _format_generic_object(self, data: Dict) -> str:
         """Format generic object."""
         lines = ["📋 **Podaci:**\n"]
-        
+
         for key, value in list(data.items())[:10]:
             if value is not None and not key.startswith("_"):
-                lines.append(f"• {key}: {value}")
-        
+                # CRITICAL FIX v12.2: Don't print raw lists/dicts - summarize them
+                if isinstance(value, list):
+                    if len(value) == 0:
+                        lines.append(f"• {key}: (prazno)")
+                    elif len(value) == 1 and isinstance(value[0], (str, int, float)):
+                        lines.append(f"• {key}: {value[0]}")
+                    else:
+                        lines.append(f"• {key}: ({len(value)} stavki)")
+                elif isinstance(value, dict):
+                    # Try to extract meaningful info from nested dict
+                    name = value.get("Name") or value.get("DisplayName") or value.get("Title")
+                    if name:
+                        lines.append(f"• {key}: {name}")
+                    else:
+                        lines.append(f"• {key}: (objekt)")
+                elif isinstance(value, str) and len(value) > 100:
+                    # Truncate long strings
+                    lines.append(f"• {key}: {value[:100]}...")
+                else:
+                    lines.append(f"• {key}: {value}")
+
         return "\n".join(lines)
     
     # Type detection

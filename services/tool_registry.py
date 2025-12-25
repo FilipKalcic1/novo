@@ -96,6 +96,38 @@ class ToolRegistry:
 
     MAX_TOOLS_PER_RESPONSE = 12  # Hard limit for LLM context
 
+    # ═══════════════════════════════════════════════════════════════
+    # METHOD DISAMBIGUATION CONFIGURATION (NEW v2.1)
+    # ═══════════════════════════════════════════════════════════════
+    # These values control how the system penalizes/boosts tools based on
+    # detected user intent. All values are configurable to allow tuning
+    # without code changes.
+    #
+    # DESIGN PRINCIPLE: The system detects user intent (read vs mutate)
+    # and adjusts tool scores accordingly. This prevents dangerous
+    # operations (DELETE) from being selected when user just wants to read.
+
+    # Penalty factors for different scenarios
+    DISAMBIGUATION_CONFIG = {
+        # When user has CLEAR read intent (e.g., "koja je", "prikaži")
+        "read_intent_penalty_factor": 0.25,
+
+        # When intent is UNCLEAR (conservative approach)
+        "unclear_intent_penalty_factor": 0.10,
+
+        # Multiplier for DELETE operations (most dangerous)
+        "delete_penalty_multiplier": 2.0,
+
+        # Multiplier for PUT/PATCH operations
+        "update_penalty_multiplier": 1.0,
+
+        # Multiplier for POST create operations
+        "create_penalty_multiplier": 0.5,
+
+        # Boost for GET operations when read intent detected
+        "get_boost_on_read_intent": 0.05,
+    }
+
 
 
     def __init__(self, redis_client=None):
@@ -599,6 +631,7 @@ class ToolRegistry:
         # Extract all property names
         all_keys = list(properties.keys())
 
+        # čemu ovo služi ? 
         # Expanded useful patterns for chaining (MINSKA ZONA #3 fix)
         useful_patterns = [
             # ID variations
@@ -1074,6 +1107,15 @@ class ToolRegistry:
         # and penalize dangerous mutations
         scored = self._apply_method_disambiguation(query, scored)
 
+        # NEW v13.0: USER-SPECIFIC INTENT BOOSTING
+        # When user says "moje vozilo", "moj auto", "meni dodijeljeno"
+        # boost tools that have personId parameter (like get_MasterData)
+        scored = self._apply_user_specific_boosting(query, scored)
+
+        # NEW v13.0: PERFORMANCE-BASED EVALUATION
+        # Apply boost/penalty based on tool success rate and user feedback
+        scored = self._apply_evaluation_adjustment(scored)
+
         scored.sort(key=lambda x: x[0], reverse=True)
 
         # Expansion search
@@ -1254,6 +1296,9 @@ class ToolRegistry:
 
         return dot / (norm_a * norm_b)
 
+
+
+    # ova funkcija je poprilično hardkodirana 
     def _apply_method_disambiguation(
         self,
         query: str,
@@ -1332,13 +1377,16 @@ class ToolRegistry:
             logger.debug("Detected MUTATION intent - no penalties applied")
             return scored
 
+        # Get config values (allows runtime tuning without code changes)
+        config = self.DISAMBIGUATION_CONFIG
+
         # If no clear read intent either, be conservative
         if not is_read_intent:
             logger.debug("No clear intent detected - applying light penalties")
-            penalty_factor = 0.1  # Light penalty
+            penalty_factor = config["unclear_intent_penalty_factor"]
         else:
             logger.info(f"🔍 Detected READ intent in: '{query}'")
-            penalty_factor = 0.25  # Stronger penalty for clear read intent
+            penalty_factor = config["read_intent_penalty_factor"]
 
         # Apply penalties to dangerous methods
         adjusted = []
@@ -1352,7 +1400,7 @@ class ToolRegistry:
 
             # Penalize DELETE methods heavily
             if tool.method == "DELETE" or "delete" in op_id_lower:
-                penalty = penalty_factor * 2  # Double penalty for DELETE
+                penalty = penalty_factor * config["delete_penalty_multiplier"]
                 new_score = max(0, score - penalty)
                 if score != new_score:
                     logger.debug(
@@ -1361,31 +1409,227 @@ class ToolRegistry:
                     )
                 adjusted.append((new_score, op_id))
 
-            # Penalize PUT/PATCH (updates) lightly
+            # Penalize PUT/PATCH (updates)
             elif tool.method in ("PUT", "PATCH") or any(
                 x in op_id_lower for x in ["update", "put", "patch"]
             ):
-                penalty = penalty_factor
+                penalty = penalty_factor * config["update_penalty_multiplier"]
                 new_score = max(0, score - penalty)
                 adjusted.append((new_score, op_id))
 
-            # Penalize POST slightly (creates)
+            # Penalize POST (creates/mutations) when read intent detected
             elif tool.method == "POST" and "get" not in op_id_lower:
-                # Some "POST" methods are actually queries (like search)
-                if any(x in op_id_lower for x in ["create", "add", "new", "insert"]):
-                    penalty = penalty_factor * 0.5
-                    new_score = max(0, score - penalty)
-                    adjusted.append((new_score, op_id))
-                else:
-                    adjusted.append((score, op_id))
+                # v13.1 FIX: ALL POST methods get penalized for read intent
+                # Previous bug: post_Vehicles wasn't penalized because it lacked "create" keyword
+                # POST is a mutation method - if user wants data, they need GET
 
-            # Boost GET methods slightly for read intent
+                # Check if it's a search/query POST (rare but exists)
+                is_search_post = any(x in op_id_lower for x in ["search", "query", "find", "filter"])
+
+                if is_search_post:
+                    # Search POSTs are pseudo-GETs, don't penalize
+                    adjusted.append((score, op_id))
+                else:
+                    # All other POSTs get penalized for read intent
+                    penalty = penalty_factor * config["create_penalty_multiplier"]
+                    new_score = max(0, score - penalty)
+                    logger.debug(
+                        f"🔻 Penalized POST: {op_id} "
+                        f"({score:.3f} → {new_score:.3f})"
+                    )
+                    adjusted.append((new_score, op_id))
+
+            # Boost GET methods when read intent detected
             elif tool.method == "GET" and is_read_intent:
-                boost = 0.05  # Small boost for GET on read intent
+                boost = config["get_boost_on_read_intent"]
                 adjusted.append((score + boost, op_id))
 
             else:
                 adjusted.append((score, op_id))
+
+        return adjusted
+
+    def _apply_user_specific_boosting(
+        self,
+        query: str,
+        scored: List[Tuple[float, str]]
+    ) -> List[Tuple[float, str]]:
+        """
+        NEW v13.0: USER-SPECIFIC INTENT BOOSTING
+
+        Problem iz logova:
+            Korisnik: "Koji je auto meni zadan" ili "moje vozilo"
+            Sustav bira: get_Vehicles (vraća SVA vozila tenanta) ❌
+            Trebao bi: get_MasterData (vraća podatke za OSOBU) ✓
+
+        Rješenje:
+            1. Detektiraj "user-specific intent" u query-ju
+            2. Analiziraj parametre alata - ima li personId/AssignedToId?
+            3. Boost alate koji podržavaju filtriranje po korisniku
+            4. Penaliziraj alate koji vraćaju sve podatke (bez personId parametra)
+
+        User-specific patterns (Croatian + English):
+            - "moje", "moj", "moja", "moji" (my)
+            - "meni", "mi" (to me, for me)
+            - "dodijeljeno mi", "zadan mi" (assigned to me)
+            - "za mene" (for me)
+            - "prikaži mi moje" (show me my)
+
+        Args:
+            query: User query
+            scored: List of (score, operation_id) tuples
+
+        Returns:
+            Modified scored list with user-specific boosting applied
+        """
+        query_lower = query.lower().strip()
+
+        # Patterns indicating USER-SPECIFIC intent
+        user_specific_patterns = [
+            # Croatian possessive pronouns
+            r'\bmoje?\b', r'\bmoja\b', r'\bmoji\b',  # my, mine
+            r'\bmeni\b', r'\bmi\b',  # to me, for me
+            # Croatian phrases
+            r'dodijeljeno\s+mi', r'zadan[ao]?\s+mi',  # assigned to me
+            r'za\s+mene', r'pripada\s+mi',  # for me, belongs to me
+            r'imam\s+li', r'imali?\b',  # do I have
+            r'moj[aei]?\s+vozil', r'moj[aei]?\s+auto',  # my vehicle, my car
+            r'koji\s+auto.*meni', r'koje\s+vozilo.*meni',  # which car is mine
+            # English equivalents
+            r'\bmy\b', r'\bmine\b', r'\bme\b',
+            r'assigned\s+to\s+me', r'for\s+me', r'belongs\s+to\s+me',
+            r'do\s+i\s+have', r'i\s+have',
+        ]
+
+        # Check if query has user-specific intent
+        is_user_specific = any(
+            re.search(pattern, query_lower)
+            for pattern in user_specific_patterns
+        )
+
+        if not is_user_specific:
+            logger.debug("No user-specific intent detected")
+            return scored
+
+        logger.info(f"👤 Detected USER-SPECIFIC intent in: '{query}'")
+
+        # Parameters that indicate tool supports user-specific filtering
+        user_filter_params = {
+            # Primary person identifiers
+            'personid', 'person_id',
+            'assignedtoid', 'assigned_to_id',
+            'driverid', 'driver_id',
+            'userid', 'user_id',
+            # Secondary identifiers
+            'ownerid', 'owner_id',
+            'employeeid', 'employee_id',
+            'createdby', 'created_by',
+        }
+
+        # Apply boosting/penalties based on tool parameters
+        adjusted = []
+        boost_value = 0.15  # Significant boost for user-filterable tools
+        penalty_value = 0.10  # Penalty for tools without user filtering
+        masterdata_boost = 0.25  # Extra boost for get_MasterData (v13.2 FIX)
+        calendar_penalty = 0.20  # Penalty for Calendar endpoints on "moje vozilo" queries
+
+        for score, op_id in scored:
+            tool = self.tools.get(op_id)
+            if not tool:
+                adjusted.append((score, op_id))
+                continue
+
+            # Check if tool has any user-filter parameters
+            tool_params_lower = {p.lower() for p in tool.parameters.keys()}
+            has_user_filter = bool(tool_params_lower & user_filter_params)
+
+            # Also check output_keys for MasterData-like responses
+            # MasterData returns user-specific data like "Vehicle", "Person", etc.
+            output_keys_lower = {k.lower() for k in tool.output_keys}
+            is_master_data_like = any(
+                key in op_id.lower()
+                for key in ['masterdata', 'person', 'profile', 'user', 'employee']
+            )
+
+            # v13.2 FIX: Special handling for "moje vozilo" queries
+            # get_EquipmentCalendar* endpoints match "vozilo" in embedding but are WRONG for this query
+            # get_MasterData is the CORRECT tool - it returns user's assigned vehicles
+            op_id_lower = op_id.lower()
+
+            # PRIORITY 1: get_MasterData gets highest boost for "moje vozilo"
+            if 'masterdata' in op_id_lower:
+                new_score = score + masterdata_boost + boost_value
+                logger.info(
+                    f"⬆️ MASTERDATA BOOST: {op_id} "
+                    f"({score:.3f} → {new_score:.3f})"
+                )
+                adjusted.append((new_score, op_id))
+
+            # PRIORITY 2: Calendar endpoints get penalized for "moje vozilo" queries
+            # These are for viewing SCHEDULES, not vehicle INFO
+            elif 'calendar' in op_id_lower or 'equipment' in op_id_lower:
+                new_score = max(0, score - calendar_penalty)
+                logger.debug(
+                    f"⬇️ Calendar penalty: {op_id} "
+                    f"({score:.3f} → {new_score:.3f})"
+                )
+                adjusted.append((new_score, op_id))
+
+            # PRIORITY 3: Other user-filterable tools get standard boost
+            elif has_user_filter or is_master_data_like:
+                new_score = score + boost_value
+                logger.debug(
+                    f"⬆️ Boosted (user-filterable): {op_id} "
+                    f"({score:.3f} → {new_score:.3f})"
+                )
+                adjusted.append((new_score, op_id))
+
+            # PRIORITY 4: GET vehicle tools without personId - PENALIZE
+            elif tool.method == "GET" and 'vehicle' in op_id_lower:
+                new_score = max(0, score - penalty_value)
+                logger.debug(
+                    f"⬇️ Penalized (no user filter): {op_id} "
+                    f"({score:.3f} → {new_score:.3f})"
+                )
+                adjusted.append((new_score, op_id))
+
+            else:
+                # Other tools - no change
+                adjusted.append((score, op_id))
+
+        return adjusted
+
+    def _apply_evaluation_adjustment(
+        self,
+        scored: List[Tuple[float, str]]
+    ) -> List[Tuple[float, str]]:
+        """
+        NEW v13.0: PERFORMANCE-BASED EVALUATION
+
+        Apply boost/penalty based on historical tool performance:
+        - Tools with high success rate get a boost
+        - Tools with many failures get a penalty
+        - User feedback (positive/negative) affects score
+
+        This enables the system to LEARN which tools work well.
+
+        Args:
+            scored: List of (score, operation_id) tuples
+
+        Returns:
+            Modified scored list with evaluation adjustments
+        """
+        try:
+            from services.tool_evaluator import get_tool_evaluator
+            evaluator = get_tool_evaluator()
+        except ImportError:
+            logger.debug("Tool evaluator not available - skipping evaluation adjustment")
+            return scored
+
+        adjusted = []
+        for score, op_id in scored:
+            new_score = evaluator.apply_evaluation_adjustment(op_id, score)
+            adjusted.append((new_score, op_id))
 
         return adjusted
 

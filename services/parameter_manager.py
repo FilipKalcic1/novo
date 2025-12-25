@@ -378,8 +378,12 @@ class ParameterManager:
                         break
 
                 if not matched:
-                    warnings.append(
-                        f"Unknown parameter '{param_name}' - ignoring"
+                    # FIX v13.2: Log at debug level, not warning, because
+                    # some params like personId are intentionally added by
+                    # tool_executor AFTER this processing step
+                    logger.debug(
+                        f"Parameter '{param_name}' not in Swagger definition - "
+                        f"will be handled by executor if needed"
                     )
                     continue
             else:

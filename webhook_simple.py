@@ -1,6 +1,9 @@
 """
 Simple webhook endpoint for WhatsApp messages.
 Receives messages and pushes to Redis queue for worker processing.
+
+Version: 2.0
+NEW: Validates sender field is not empty (prevents 400 errors downstream)
 """
 
 from fastapi import APIRouter, Request, HTTPException
@@ -26,8 +29,9 @@ async def whatsapp_webhook(request: Request):
     Flow:
     1. Receive webhook from WhatsApp
     2. Extract message data (sender, text, message_id)
-    3. Push to Redis STREAM: "whatsapp_stream_inbound"
-    4. Worker picks up from stream via consumer group
+    3. VALIDATE sender is present (prevents 400 errors in WhatsApp response)
+    4. Push to Redis STREAM: "whatsapp_stream_inbound"
+    5. Worker picks up from stream via consumer group
     """
     try:
         body = await request.json()
@@ -45,6 +49,15 @@ async def whatsapp_webhook(request: Request):
             content_list = result.get("content", [])
             message_id = result.get("messageId", "")
 
+            # CRITICAL v2.0: Validate sender is present
+            # Without sender, we cannot reply - this would cause 400 error
+            if not sender:
+                logger.error(
+                    "❌ MISSING SENDER in webhook! "
+                    f"message_id={message_id}, content_types={[c.get('type') for c in content_list]}"
+                )
+                continue
+
             # Extract text from content
             text = ""
             for content in content_list:
@@ -53,7 +66,12 @@ async def whatsapp_webhook(request: Request):
                     break
 
             if not text:
-                logger.warning("⚠️ No text content in message")
+                # Log what type of content we received (image, location, etc.)
+                content_types = [c.get("type") for c in content_list]
+                logger.warning(
+                    f"⚠️ No text content in message from {sender[-4:]}... "
+                    f"Content types: {content_types}"
+                )
                 continue
 
             # Push to Redis STREAM (not list!) - this is what worker listens to
@@ -65,7 +83,7 @@ async def whatsapp_webhook(request: Request):
 
             redis_client.xadd("whatsapp_stream_inbound", stream_data)
 
-            logger.info(f"✅ Message pushed to stream: {sender[-4:]} - {text[:30]}")
+            logger.info(f"✅ Message pushed to stream: {sender[-4:]}... - {text[:30]}")
 
         return {"status": "ok"}
 

@@ -1,14 +1,17 @@
 """
 Background Worker
-Version: 11.0
+Version: 12.0
 
 Processes messages from Redis queue.
 
-CRITICAL FIXES:
+CRITICAL FIXES v12.0:
 1. CONCURRENT processing - multiple messages at once
 2. GRACEFUL shutdown - finishes current tasks before exit
 3. Proper signal handling
 4. Singleton services
+5. NEW: Message deduplication lock (prevents double execution)
+6. NEW: WhatsAppService integration (phone validation, UTF-8 safe)
+7. NEW: Exponential backoff for 429 errors
 """
 
 import asyncio
@@ -17,8 +20,9 @@ import logging
 import time
 import json
 import sys
+import hashlib
 from datetime import datetime
-from typing import Optional, Set
+from typing import Optional, Set, Dict
 from contextlib import suppress
 
 import httpx
@@ -89,31 +93,35 @@ class GracefulShutdown:
 class Worker:
     """
     Background message processor with concurrent execution.
-    
+
     Features:
     - Concurrent message processing (up to MAX_CONCURRENT)
     - Graceful shutdown with task completion
     - Singleton services (loaded once)
     - Rate limiting per user
+    - NEW v12.0: Message deduplication lock (prevents double execution)
+    - NEW v12.0: WhatsAppService for validated sending
     """
-    
+
     MAX_CONCURRENT = 5  # Process up to 5 messages concurrently
-    
+    MESSAGE_LOCK_TTL = 300  # FIX v13.2: Increased to 5 minutes (was 60s)
+
     def __init__(self):
         self.redis: Optional[aioredis.Redis] = None
         self.shutdown = GracefulShutdown()
         self.consumer_name = f"worker_{int(datetime.utcnow().timestamp())}"
         self.group_name = "workers"
-        
+
         # Rate limiting
         self._rate_limits: dict = {}
         self.rate_limit = settings.RATE_LIMIT_PER_MINUTE
         self.rate_window = settings.RATE_LIMIT_WINDOW
-        
+
         # Singleton services (initialized once at startup)
         self._gateway = None
         self._registry = None
         self._message_engine = None  # CRITICAL: Singleton MessageEngine
+        self._whatsapp_service = None  # NEW: WhatsApp integration
 
         # Per-request services (thread-safe)
         self._queue = None
@@ -123,10 +131,14 @@ class Worker:
         # Stats
         self._messages_processed = 0
         self._messages_failed = 0
+        self._duplicates_skipped = 0  # NEW: Track duplicates
         self._start_time = None
 
         # Semaphore for concurrency control
         self._semaphore = asyncio.Semaphore(self.MAX_CONCURRENT)
+
+        # NEW v12.0: In-memory lock for active processing
+        self._processing_locks: Dict[str, asyncio.Lock] = {}
     
     async def start(self):
         """Start the worker."""
@@ -245,6 +257,8 @@ class Worker:
         - Cache persistence across messages
         - Reduced memory overhead
         - Consistent state
+
+        NEW v12.0: Initializes WhatsAppService for validated sending
         """
         logger.info("🔧 Initializing singleton services...")
 
@@ -254,6 +268,7 @@ class Worker:
         from services.cache_service import CacheService
         from services.context_service import ContextService
         from services.message_engine import MessageEngine
+        from services.whatsapp_service import WhatsAppService
         from database import AsyncSessionLocal
 
         # 1. Initialize core services (shared across all requests)
@@ -265,7 +280,15 @@ class Worker:
         self._cache = CacheService(self.redis)
         self._context = ContextService(self.redis)
 
-        # 3. CRITICAL FIX: Use initialize() with ALL sources at once
+        # 3. NEW v12.0: Initialize WhatsApp service
+        self._whatsapp_service = WhatsAppService()
+        health = self._whatsapp_service.health_check()
+        if health["healthy"]:
+            logger.info("✅ WhatsAppService initialized and healthy")
+        else:
+            logger.warning(f"⚠️ WhatsAppService unhealthy: {health}")
+
+        # 4. CRITICAL FIX: Use initialize() with ALL sources at once
         # (Not load_swagger() in loop - that overwrites cache!)
         swagger_sources = settings.swagger_sources
         if not swagger_sources:
@@ -278,11 +301,18 @@ class Worker:
                 logger.info(
                     f"✅ Tool Registry: {len(self._registry.tools)} tools loaded"
                 )
+
+                # v13.0: Initialize API Capability Registry for dynamic learning
+                from services.api_capabilities import initialize_capability_registry
+                capability_registry = await initialize_capability_registry(self._registry)
+                logger.info(
+                    f"✅ API Capabilities: {len(capability_registry.capabilities)} tools analyzed"
+                )
             else:
                 logger.error("❌ Tool Registry initialization failed")
                 raise RuntimeError("Tool Registry initialization failed")
 
-        # 4. CRITICAL FIX: Initialize MessageEngine ONCE (singleton pattern)
+        # 5. CRITICAL FIX: Initialize MessageEngine ONCE (singleton pattern)
         # Note: DB session is per-request, so we pass None here
         # and inject it per-message in _process_message
         logger.info("🔧 Initializing MessageEngine singleton...")
@@ -354,37 +384,122 @@ class Worker:
         """Handle message with semaphore for concurrency control."""
         async with self._semaphore:
             await self._handle_message(msg_id, data)
-    
+
+    async def _acquire_message_lock(self, sender: str, message_id: str) -> bool:
+        """
+        Acquire distributed lock to prevent double execution.
+
+        NEW v12.0: Koristi Redis SETNX za atomičku akviziciju locka.
+        Ovo sprječava situaciju gdje dva workera procesiraju istu poruku.
+
+        Args:
+            sender: Sender phone number
+            message_id: Unique message ID
+
+        Returns:
+            True if lock acquired, False if message is already being processed
+        """
+        # Create unique lock key
+        lock_key = f"msg_lock:{sender}:{message_id}"
+
+        try:
+            # SETNX - Set if Not eXists (atomic operation)
+            acquired = await self.redis.set(
+                lock_key,
+                self.consumer_name,
+                nx=True,  # Only set if not exists
+                ex=self.MESSAGE_LOCK_TTL  # Auto-expire after TTL
+            )
+
+            if acquired:
+                logger.debug(f"🔒 Lock acquired: {lock_key}")
+                return True
+            else:
+                # Lock exists - someone else is processing
+                holder = await self.redis.get(lock_key)
+                logger.warning(
+                    f"⚠️ DUPLICATE DETECTED: {lock_key} "
+                    f"(held by {holder})"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"Lock acquisition error: {e}")
+            # On error, allow processing (fail open)
+            return True
+
+    async def _release_message_lock(self, sender: str, message_id: str) -> None:
+        """Release message processing lock."""
+        lock_key = f"msg_lock:{sender}:{message_id}"
+
+        try:
+            await self.redis.delete(lock_key)
+            logger.debug(f"🔓 Lock released: {lock_key}")
+        except Exception as e:
+            logger.warning(f"Lock release error: {e}")
+
     async def _handle_message(self, msg_id: str, data: dict):
-        """Handle single message."""
+        """
+        Handle single message with deduplication.
+
+        NEW v12.0:
+        1. Acquires distributed lock before processing
+        2. Skips if message already being processed
+        3. Releases lock on completion
+
+        FIX v13.2:
+        - Uses content hash as fallback if message_id missing
+        - Prevents duplicate processing from webhook retries
+        """
         sender = data.get("sender", "")
         text = data.get("text", "")
         message_id = data.get("message_id", "")
-        
+
+        # FIX v13.2: Generate content hash if message_id is missing or empty
+        # This prevents duplicates when webhook is retried by WhatsApp/Infobip
+        if not message_id:
+            content_hash = hashlib.md5(
+                f"{sender}:{text}".encode()
+            ).hexdigest()[:16]
+            message_id = f"hash_{content_hash}"
+            logger.debug(f"Generated content hash as message_id: {message_id}")
+
         logger.info(f"📨 Processing: {sender[-4:]} - {text[:30]}")
-        
+
+        # NEW v12.0: Check for duplicate processing
+        if not await self._acquire_message_lock(sender, message_id):
+            self._duplicates_skipped += 1
+            logger.warning(
+                f"🔁 SKIPPING DUPLICATE: {sender[-4:]} - {message_id[:20]}..."
+            )
+            await self._ack_message(msg_id)
+            return
+
         # Rate limiting
         if not self._check_rate_limit(sender):
             logger.warning(f"⚠️ Rate limited: {sender[-4:]}")
+            await self._release_message_lock(sender, message_id)
             await self._ack_message(msg_id)
             return
-        
+
         start_time = time.time()
-        
+
         try:
             response = await self._process_message(sender, text, message_id)
-            
+
             if response:
                 await self._enqueue_outbound(sender, response)
-            
+
             self._messages_processed += 1
-            
+
         except Exception as e:
             logger.error(f"❌ Processing error: {e}", exc_info=True)
             self._messages_failed += 1
             await self._store_dlq(data, str(e))
-        
+
         finally:
+            # ALWAYS release lock
+            await self._release_message_lock(sender, message_id)
             await self._ack_message(msg_id)
             elapsed = time.time() - start_time
             logger.info(f"✅ Processed in {elapsed:.2f}s")
@@ -441,53 +556,98 @@ class Worker:
                 await asyncio.sleep(1)
     
     async def _health_reporter(self):
-        """Periodic health report."""
+        """Periodic health report with extended stats."""
         while not self.shutdown.is_shutting_down():
             try:
                 await asyncio.sleep(60)
-                
+
                 if self.shutdown.is_shutting_down():
                     break
-                
+
                 active = len(self.shutdown.active_tasks)
+
+                # NEW v12.0: Include WhatsApp stats and duplicate count
+                whatsapp_stats = {}
+                if self._whatsapp_service:
+                    whatsapp_stats = self._whatsapp_service.get_stats()
+
                 logger.info(
-                    f"💓 Health: {self._messages_processed} ok, "
-                    f"{self._messages_failed} failed, "
-                    f"{active} active, "
-                    f"{len(self._registry.tools)} tools"
+                    f"💓 Health: "
+                    f"processed={self._messages_processed}, "
+                    f"failed={self._messages_failed}, "
+                    f"duplicates_skipped={self._duplicates_skipped}, "
+                    f"active={active}, "
+                    f"tools={len(self._registry.tools)}, "
+                    f"wa_sent={whatsapp_stats.get('messages_sent', 0)}, "
+                    f"wa_retries={whatsapp_stats.get('total_retries', 0)}"
                 )
             except asyncio.CancelledError:
                 break
     
     async def _send_whatsapp(self, to: str, text: str):
-        """Send WhatsApp message."""
-        if not settings.INFOBIP_API_KEY:
-            logger.warning("⚠️ No Infobip API key")
+        """
+        Send WhatsApp message via WhatsAppService.
+
+        NEW v12.0: Uses WhatsAppService which provides:
+        - Phone number validation (prevents UUID trap)
+        - UTF-8 safe encoding
+        - Type guards (ensures text is string)
+        - Exponential backoff with jitter
+        - Deep logging for debugging
+        """
+        if not self._whatsapp_service:
+            logger.warning("⚠️ WhatsAppService not initialized")
             return
-        
-        url = f"https://{settings.INFOBIP_BASE_URL}/whatsapp/1/message/text"
-        
-        headers = {
-            "Authorization": f"App {settings.INFOBIP_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "from": settings.INFOBIP_SENDER_NUMBER,
-            "to": to,
-            "content": {"text": text}
-        }
-        
+
+        result = await self._whatsapp_service.send(to, text)
+
+        if result.success:
+            logger.info(
+                f"📤 Sent to {to[-4:]}... "
+                f"(message_id={result.message_id})"
+            )
+        else:
+            logger.error(
+                f"❌ Send failed: {result.error_code} - {result.error_message}"
+            )
+
+            # Store failed message for retry
+            if result.error_code == "RATE_LIMIT":
+                # Re-queue with delay for rate limit
+                await self._enqueue_outbound_delayed(
+                    to, text,
+                    delay=result.retry_after or 30
+                )
+
+    async def _enqueue_outbound_delayed(
+        self,
+        to: str,
+        text: str,
+        delay: int = 30
+    ):
+        """
+        Enqueue outbound message with delay for rate limiting.
+
+        Uses Redis ZADD with score = current_time + delay.
+        """
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 200:
-                    logger.info(f"📤 Sent to {to[-4:]}")
-                else:
-                    logger.error(f"Send failed: {response.status_code}")
+            delayed_payload = json.dumps({
+                "to": to,
+                "text": text,
+                "scheduled_at": time.time() + delay
+            })
+
+            # Use sorted set for delayed processing
+            await self.redis.zadd(
+                "whatsapp_outbound_delayed",
+                {delayed_payload: time.time() + delay}
+            )
+
+            logger.info(
+                f"⏰ Message queued for retry in {delay}s: {to[-4:]}..."
+            )
         except Exception as e:
-            logger.error(f"Send error: {e}")
+            logger.error(f"Failed to queue delayed message: {e}")
     
     async def _enqueue_outbound(self, to: str, text: str):
         """Enqueue outbound message."""

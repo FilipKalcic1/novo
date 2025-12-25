@@ -103,6 +103,54 @@ class ToolExecutor:
                 params=resolved_params
             )
 
+            # FIX v13.2: INJECT PERSON_ID DIRECTLY INTO QUERY PARAMS
+            # This bypasses parameter_manager validation which was filtering out
+            # personId because it's not in Swagger definition for most GET tools.
+            # The injection happens HERE, not in message_engine, so it goes
+            # directly to the API call without being filtered.
+            if tool.method == "GET":
+                person_id = execution_context.user_context.get("person_id")
+                if person_id:
+                    # Use APICapabilityRegistry to check if tool supports PersonId
+                    from services.api_capabilities import get_capability_registry, ParameterSupport
+                    capability_registry = get_capability_registry()
+
+                    should_inject = True
+
+                    if capability_registry:
+                        cap = capability_registry.get_capability(tool.operation_id)
+                        if cap and cap.supports_person_id == ParameterSupport.NOT_SUPPORTED:
+                            # We learned this endpoint doesn't support PersonId
+                            should_inject = False
+                            logger.debug(
+                                f"⏭️ Skipping personId injection for {tool.operation_id} "
+                                f"(learned: NOT_SUPPORTED)"
+                            )
+                    else:
+                        # Fallback: heuristic-based skip patterns
+                        tool_lower = tool.operation_id.lower()
+                        skip_patterns = ["available", "location", "site", "config", "setting"]
+                        should_inject = not any(p in tool_lower for p in skip_patterns)
+
+                    if should_inject:
+                        # Initialize query_params if None
+                        if query_params is None:
+                            query_params = {}
+
+                        # Check if not already present (case-insensitive)
+                        has_person_id = any(
+                            k.lower() in ("personid", "driverid", "assignedtoid")
+                            for k in query_params.keys()
+                        )
+                        if not has_person_id:
+                            # Try common parameter names that APIs might accept
+                            # Most APIs use "personId" or "PersonId"
+                            query_params["personId"] = person_id
+                            logger.info(
+                                f"🎯 DIRECT INJECT: personId={person_id[:8]}... "
+                                f"for {tool.operation_id}"
+                            )
+
             # Build full URL using STRICT Master Prompt v3.1 formula
             full_url = self._build_url(tool)
 
@@ -145,6 +193,22 @@ class ToolExecutor:
                     response_body=response.data,
                     operation_id=operation_id
                 )
+
+                # FIX v13.2: Learn from "Unknown filter field" errors
+                # This teaches the system to stop injecting personId for tools that don't support it
+                error_msg = response.error_message or ""
+                if "unknown filter field" in error_msg.lower():
+                    from services.api_capabilities import get_capability_registry
+                    cap_registry = get_capability_registry()
+                    if cap_registry:
+                        cap_registry.record_failure(
+                            operation_id=operation_id,
+                            error_message=error_msg,
+                            params_used=query_params or {}
+                        )
+                        logger.info(
+                            f"📚 LEARNING: {operation_id} doesn't support filter field in error"
+                        )
 
                 return ToolExecutionResult(
                     success=False,

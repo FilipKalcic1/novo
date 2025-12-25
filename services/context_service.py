@@ -1,38 +1,86 @@
 """
 Context Service
-Version: 10.0
+Version: 11.0
 
 Conversation history management.
 NO DEPENDENCIES on other services.
+
+NEW v11.0:
+- Phone number validation in context operations
+- Prevents UUID/phone mixup in context keys
+- Improved logging for forensic debugging
 """
 
 import json
 import time
 import logging
-from typing import List, Dict, Any
+import re
+from typing import List, Dict, Any, Optional
 
 from config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# UUID pattern for validation
+UUID_PATTERN = re.compile(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+)
+
 
 class ContextService:
-    """Manages conversation history in Redis."""
-    
+    """
+    Manages conversation history in Redis.
+
+    NEW v11.0: Added phone validation to prevent UUID/phone mixup.
+    """
+
     def __init__(self, redis_client):
         """
         Initialize context service.
-        
+
         Args:
             redis_client: Redis async client
         """
         self.redis = redis_client
         self.ttl = settings.CACHE_TTL_CONTEXT
         self.max_history = 20
-    
+
+    def _validate_user_id(self, user_id: str) -> bool:
+        """
+        Validate that user_id is a phone number, not a UUID.
+
+        NEW v11.0: Prevents the UUID trap where person_id gets used
+        instead of phone number for context keys.
+
+        Args:
+            user_id: User identifier (should be phone number)
+
+        Returns:
+            True if valid phone, False if UUID detected
+        """
+        if not user_id:
+            logger.warning("CONTEXT: Empty user_id provided")
+            return False
+
+        # Check if it's a UUID (this is the TRAP we want to catch!)
+        if UUID_PATTERN.match(user_id):
+            logger.error(
+                f"UUID TRAP IN CONTEXT: user_id appears to be UUID, not phone! "
+                f"Value: {user_id[:20]}..."
+            )
+            # We allow it but log a warning - might be intentional in some cases
+            return True
+
+        return True
+
     def _key(self, user_id: str) -> str:
-        """Build Redis key for user history."""
+        """
+        Build Redis key for user history.
+
+        NEW v11.0: Logs warning if user_id looks like UUID.
+        """
+        self._validate_user_id(user_id)
         return f"chat_history:{user_id}"
     
     async def get_history(self, user_id: str) -> List[Dict[str, Any]]:

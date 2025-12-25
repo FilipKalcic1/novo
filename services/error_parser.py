@@ -62,11 +62,27 @@ class ErrorParser:
             )
 
         elif status_code == 403:
-            return (
-                f"Pristup odbijen za '{operation_id}'. "
-                f"Korisnik nema dozvolu za ovu operaciju. "
-                f"Detalji: {error_message}."
-            )
+            # Provide more specific feedback based on operation type
+            if any(x in operation_id.lower() for x in ["booking", "calendar", "reservation"]):
+                return (
+                    f"Pristup odbijen za '{operation_id}'. "
+                    f"Korisnik nema dozvolu za rezervaciju ovog vozila. "
+                    f"Moguće da vozilo nije dostupno za ovog korisnika ili "
+                    f"korisnik nema pravo na rezervaciju. "
+                    f"Detalji: {error_message}."
+                )
+            elif any(x in operation_id.lower() for x in ["delete", "remove"]):
+                return (
+                    f"Pristup odbijen za '{operation_id}'. "
+                    f"Korisnik nema dozvolu za brisanje ovog resursa. "
+                    f"Detalji: {error_message}."
+                )
+            else:
+                return (
+                    f"Pristup odbijen za '{operation_id}'. "
+                    f"Korisnik nema dozvolu za ovu operaciju. "
+                    f"Detalji: {error_message}."
+                )
 
         elif status_code == 404:
             return (
