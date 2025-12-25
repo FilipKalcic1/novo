@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "version": "1.0",
+  "description": "Schema-based parameter classification rules. Loaded at startup, merged with runtime learning.",
+
+  "context_types": {
+    "person_id": {
+      "description": "Identifies a person/user/driver in the system",
+      "schema_hints": {
+        "formats": ["uuid", "guid"],
+        "types": ["string"],
+        "examples": ["PersonId", "UserId", "DriverId", "AssignedToId"]
+      },
+      "classification_rules": {
+        "description_keywords": [
+          "person", "user", "driver", "employee",
+          "assigned to", "created by", "modified by",
+          "owner", "requestor", "approver"
+        ],
+        "name_patterns": [
+          ".*person.*id.*",
+          ".*user.*id.*",
+          ".*driver.*id.*",
+          "^assignedto(id)?$",
+          "^createdby$",
+          "^modifiedby$"
+        ],
+        "path_hints": ["/person/", "/users/", "/drivers/"]
+      },
+      "scoring": {
+        "schema_format_match": 2,
+        "description_keyword_match": 3,
+        "name_pattern_match": 2,
+        "path_hint_match": 1,
+        "threshold": 3
+      },
+      "fallback_names": [
+        "personid", "person_id", "userid", "user_id",
+        "driverid", "driver_id", "assignedtoid",
+        "assigned_to_id", "createdby", "created_by",
+        "modifiedby", "modified_by"
+      ]
+    },
+
+    "vehicle_id": {
+      "description": "Identifies a vehicle/car/asset in the fleet",
+      "schema_hints": {
+        "formats": ["uuid", "guid"],
+        "types": ["string"]
+      },
+      "classification_rules": {
+        "description_keywords": ["vehicle", "car", "asset", "fleet"],
+        "name_patterns": [".*vehicle.*id.*", ".*car.*id.*"],
+        "path_hints": ["/vehicles/", "/cars/", "/fleet/"]
+      },
+      "scoring": {
+        "schema_format_match": 2,
+        "description_keyword_match": 3,
+        "name_pattern_match": 2,
+        "path_hint_match": 1,
+        "threshold": 3
+      },
+      "fallback_names": ["vehicleid", "vehicle_id", "carid", "car_id"]
+    },
+
+    "tenant_id": {
+      "description": "Multi-tenancy identifier (organization/company)",
+      "schema_hints": {
+        "formats": ["uuid", "guid"],
+        "types": ["string"]
+      },
+      "classification_rules": {
+        "description_keywords": ["tenant", "organization", "company", "client"],
+        "name_patterns": [".*tenant.*id.*", "^x-tenant(-id)?$"],
+        "path_hints": []
+      },
+      "scoring": {
+        "schema_format_match": 2,
+        "description_keyword_match": 3,
+        "name_pattern_match": 2,
+        "path_hint_match": 1,
+        "threshold": 3
+      },
+      "fallback_names": ["tenantid", "tenant_id", "x-tenant-id", "x_tenant_id"]
+    }
+  },
+
+  "runtime_learning": {
+    "enabled": true,
+    "confidence_threshold": 0.8,
+    "min_successful_calls": 3,
+    "description": "When a parameter classification succeeds 3+ times with 80%+ confidence, auto-add to fallback_names"
+  },
+
+  "api_specific_overrides": {
+    "description": "API-specific exceptions (e.g., /vehicles/owner_id is actually person_id)",
+    "overrides": [
+      {
+        "api_path": "/vehicles/*",
+        "parameter": "owner_id",
+        "force_context_type": "person_id",
+        "reason": "Vehicle owner is a person, not a vehicle"
+      }
+    ]
+  }
+}
