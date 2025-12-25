@@ -1,0 +1,7 @@
+# Force LF line endings for shell scripts (prevents Docker issues on Windows)
+*.sh text eol=lf
+
+# Other common files that should use LF
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+*.py text eol=lf

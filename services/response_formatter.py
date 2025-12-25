@@ -1,9 +1,19 @@
 """
 Response Formatter
-Version: 10.0
+Version: 10.2 (Extended Leasing Keywords)
 
 Formats API responses for WhatsApp.
 NO DEPENDENCIES on other services.
+
+v10.2:
+- Extended leasing/lizing keyword detection
+- More field name variations for provider lookup
+- Contract end date support
+
+v10.1:
+- Intent-aware formatting based on user query
+- Specific responses for kilometraža, registracija, VIN queries
+- Falls back to list formatting only when no specific intent detected
 """
 
 import logging
@@ -50,7 +60,8 @@ class ResponseFormatter:
     def format_result(
         self,
         result: Dict[str, Any],
-        tool: Optional[Any] = None  # Can be UnifiedToolDefinition (Pydantic) or dict
+        tool: Optional[Any] = None,  # Can be UnifiedToolDefinition (Pydantic) or dict
+        user_query: Optional[str] = None  # NEW: User's original question for intent-awareness
     ) -> str:
         """
         Format API result for display.
@@ -58,10 +69,13 @@ class ResponseFormatter:
         Args:
             result: Execution result
             tool: Tool metadata (UnifiedToolDefinition or dict)
+            user_query: User's original question (for intent-aware formatting)
 
         Returns:
             Formatted string
         """
+        # Store user_query for use in sub-methods
+        self._current_query = user_query
         if not result.get("success"):
             error = result.get("error", "Nepoznata greška")
             return f"❌ Greška: {error}"
@@ -91,6 +105,12 @@ class ResponseFormatter:
             if not items:
                 return "Nema pronađenih rezultata."
 
+            # NEW v10.1: Try intent-aware formatting first
+            single_response = self._try_format_single_item(items)
+            if single_response:
+                return single_response
+
+            # Fall back to list formatting
             if self._is_vehicle(items[0] if items else {}):
                 return self.format_vehicle_list(items)
             elif self._is_person(items[0] if items else {}):
@@ -110,6 +130,12 @@ class ResponseFormatter:
                 if isinstance(nested_data, list):
                     if not nested_data:
                         return "Nema pronađenih rezultata."
+
+                    # NEW v10.1: Try intent-aware formatting first
+                    single_response = self._try_format_single_item(nested_data)
+                    if single_response:
+                        return single_response
+
                     if self._is_vehicle(nested_data[0]):
                         return self.format_vehicle_list(nested_data)
                     elif self._is_person(nested_data[0]):
@@ -118,6 +144,11 @@ class ResponseFormatter:
                         return self._format_masterdata(nested_data[0])
                     return self._format_generic_list(nested_data, count)
                 elif isinstance(nested_data, dict):
+                    # NEW v10.1: Try intent-aware formatting for single dict
+                    intent_response = self._format_for_query(nested_data)
+                    if intent_response:
+                        return intent_response
+
                     if self._is_masterdata(nested_data):
                         return self._format_masterdata(nested_data)
                     elif self._is_vehicle(nested_data):
@@ -126,6 +157,11 @@ class ResponseFormatter:
 
             # CRITICAL FIX: Type guard - only check structure on dict/list, not primitives
             if isinstance(data, dict):
+                # NEW v10.1: Try intent-aware formatting
+                intent_response = self._format_for_query(data)
+                if intent_response:
+                    return intent_response
+
                 if self._is_vehicle(data):
                     return self._format_vehicle_details(data)
                 elif self._is_masterdata(data):
@@ -136,6 +172,12 @@ class ResponseFormatter:
                 # List of items without "items" wrapper
                 if not data:
                     return "Nema pronađenih rezultata."
+
+                # NEW v10.1: Try intent-aware formatting first
+                single_response = self._try_format_single_item(data)
+                if single_response:
+                    return single_response
+
                 if isinstance(data[0], dict):
                     if self._is_vehicle(data[0]):
                         return self.format_vehicle_list(data)
@@ -335,3 +377,214 @@ class ResponseFormatter:
         has_vehicle = self._is_vehicle(data)
         has_driver = "Driver" in data or "DriverName" in data
         return has_vehicle and has_driver
+
+    # ========== INTENT-AWARE FORMATTING (v10.1) ==========
+
+    def _is_specific_query(self) -> bool:
+        """
+        Check if user asked for specific information (not a list/selection).
+
+        Examples of specific queries:
+        - "kolika mi je kilometraža" → wants mileage number
+        - "kada mi istječe registracija" → wants registration date
+        - "daj mi podatke o vozilu" → wants vehicle details
+        """
+        if not self._current_query:
+            return False
+
+        q = self._current_query.lower()
+
+        # Keywords indicating user wants specific data, not a selection
+        specific_keywords = [
+            "kolika", "koliko", "koja", "koji", "što",
+            "kada", "kad", "do kada",
+            "daj mi", "pokaži mi", "prikaži",
+            "kilometraž", "registracij", "istek", "istječe",
+            "mileage", "plate", "vin",
+            "lizing", "leasing", "rata", "ugovor", "najam"
+        ]
+
+        return any(kw in q for kw in specific_keywords)
+
+    def _format_for_query(self, data: Dict) -> Optional[str]:
+        """
+        Format data based on what user specifically asked for.
+
+        Returns None if no specific intent detected → fall back to default.
+        """
+        if not self._current_query:
+            return None
+
+        q = self._current_query.lower()
+
+        # Extract vehicle info for context
+        name = (
+            data.get("FullVehicleName") or
+            data.get("DisplayName") or
+            data.get("Name") or
+            "Vaše vozilo"
+        )
+        plate = data.get("LicencePlate") or data.get("Plate") or ""
+
+        # MILEAGE query
+        if any(kw in q for kw in ["kilometraž", "mileage", "koliko km", "koliko kilometara", "km ima"]):
+            mileage = data.get("Mileage") or data.get("CurrentMileage")
+            if mileage:
+                return (
+                    f"🚗 **{name}**\n"
+                    f"📏 Kilometraža: **{mileage:,} km**"
+                )
+            return f"❌ Kilometraža nije dostupna za {name}."
+
+        # REGISTRATION / PLATE query
+        if any(kw in q for kw in ["registracij", "tablice", "tablica", "plate", "oznaka", "broj tablica"]):
+            if plate:
+                lines = [f"🚗 **{name}**", f"📋 Registracija: **{plate}**"]
+
+                # Add registration expiration if asked
+                if any(kw in q for kw in ["istek", "istječe", "do kada", "kada", "vrijedi"]):
+                    exp_date = (
+                        data.get("RegistrationExpirationDate") or
+                        data.get("ExpirationDate") or
+                        data.get("RegistrationExpiry")
+                    )
+                    if exp_date:
+                        # Try to format date nicely
+                        if isinstance(exp_date, str) and "T" in exp_date:
+                            exp_date = exp_date.split("T")[0]
+                        lines.append(f"📅 Istek registracije: **{exp_date}**")
+
+                return "\n".join(lines)
+            return f"❌ Registracija nije dostupna za vozilo."
+
+        # VIN query
+        if "vin" in q:
+            vin = data.get("VIN") or data.get("Vin")
+            if vin:
+                return f"🚗 **{name}**\n🔑 VIN: **{vin}**"
+            return f"❌ VIN nije dostupan za {name}."
+
+        # DRIVER query
+        if any(kw in q for kw in ["vozač", "driver", "tko vozi", "koji vozač"]):
+            driver = data.get("Driver") or data.get("DriverName") or data.get("AssignedDriver")
+            if driver:
+                return f"🚗 **{name}**\n👤 Vozač: **{driver}**"
+            return f"❌ Vozač nije dodijeljen vozilu {name}."
+
+        # LEASING / CONTRACT query - PROŠIRENO za sve varijacije
+        if any(kw in q for kw in [
+            "leasing", "lizing", "ugovor", "rata", "najam", "contract",
+            "mjesečna rata", "provider", "davatelj", "lizing kuć", "leasing kuć"
+        ]):
+            provider = (
+                data.get("ProviderName") or
+                data.get("LeasingProvider") or
+                data.get("Provider") or
+                data.get("LeasingCompany") or
+                data.get("Lessor") or
+                data.get("LeasingHouse") or
+                data.get("ContractProvider")
+            )
+            monthly = (
+                data.get("MonthlyAmount") or
+                data.get("MonthlyRate") or
+                data.get("MonthlyPayment") or
+                data.get("LeaseRate") or
+                data.get("MonthlyLease")
+            )
+            contract_end = (
+                data.get("ContractEndDate") or
+                data.get("LeaseEndDate") or
+                data.get("ContractExpiry")
+            )
+
+            if provider or monthly:
+                lines = [f"🚗 **{name}**"]
+                if provider:
+                    lines.append(f"💼 Lizing kuća: **{provider}**")
+                if monthly:
+                    lines.append(f"💰 Mjesečna rata: **{monthly} EUR**")
+                if contract_end:
+                    if isinstance(contract_end, str) and "T" in contract_end:
+                        contract_end = contract_end.split("T")[0]
+                    lines.append(f"📅 Kraj ugovora: {contract_end}")
+                return "\n".join(lines)
+            return f"❌ Podaci o leasingu nisu dostupni za {name}."
+
+        # GENERAL "my vehicle" / "moje vozilo" query - show summary
+        if any(kw in q for kw in ["moje vozilo", "moj auto", "moja kola", "koje vozilo", "koji auto"]):
+            return self._format_vehicle_summary(data, name, plate)
+
+        # GENERAL "info" / "podaci" query - show all available
+        if any(kw in q for kw in ["podaci", "informacije", "info", "sve o", "detalji"]):
+            return self._format_vehicle_summary(data, name, plate)
+
+        # No specific intent detected
+        return None
+
+    def _format_vehicle_summary(self, data: Dict, name: str, plate: str) -> str:
+        """Format comprehensive vehicle summary."""
+        lines = [f"🚗 **{name}**\n"]
+
+        if plate:
+            lines.append(f"📋 Registracija: {plate}")
+
+        mileage = data.get("Mileage") or data.get("CurrentMileage")
+        if mileage:
+            lines.append(f"📏 Kilometraža: {mileage:,} km")
+
+        vin = data.get("VIN")
+        if vin:
+            lines.append(f"🔑 VIN: {vin}")
+
+        driver = data.get("Driver") or data.get("DriverName")
+        if driver:
+            lines.append(f"👤 Vozač: {driver}")
+
+        exp_date = (
+            data.get("RegistrationExpirationDate") or
+            data.get("ExpirationDate")
+        )
+        if exp_date:
+            if isinstance(exp_date, str) and "T" in exp_date:
+                exp_date = exp_date.split("T")[0]
+            lines.append(f"📅 Istek registracije: {exp_date}")
+
+        provider = data.get("ProviderName") or data.get("LeasingProvider")
+        monthly = data.get("MonthlyAmount")
+        if provider:
+            lines.append(f"💼 Leasing: {provider}")
+        if monthly:
+            lines.append(f"💰 Rata: {monthly} EUR/mj")
+
+        return "\n".join(lines)
+
+    def _try_format_single_item(self, items: List[Dict]) -> Optional[str]:
+        """
+        Try to format as single item response if user asked specific question.
+
+        Returns None if should show list instead.
+        """
+        if not items:
+            return None
+
+        # Only format single item for specific queries
+        if not self._is_specific_query():
+            return None
+
+        # Take first item (usually user's own vehicle)
+        data = items[0]
+
+        # Try intent-aware formatting
+        intent_response = self._format_for_query(data)
+        if intent_response:
+            return intent_response
+
+        # Fall back to detailed view for single item with specific query
+        if len(items) == 1:
+            if self._is_masterdata(data):
+                return self._format_masterdata(data)
+            if self._is_vehicle(data):
+                return self._format_vehicle_details(data)
+
+        return None
