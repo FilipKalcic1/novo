@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     MOBILITY_CLIENT_ID: str = Field(..., description="OAuth2 client ID")
     MOBILITY_CLIENT_SECRET: str = Field(..., description="OAuth2 client secret")
     MOBILITY_TENANT_ID: str = Field(..., description="Tenant ID for x-tenant header")
+    MOBILITY_SCOPE: Optional[str] = Field(default=None, description="OAuth2 scope(s) for token request")
     
     # =========================================================================
     # AZURE OPENAI - REQUIRED (NEMA DEFAULT VRIJEDNOSTI!)

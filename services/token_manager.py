@@ -45,6 +45,7 @@ class TokenManager:
         self.auth_url = settings.MOBILITY_AUTH_URL
         self.client_id = settings.MOBILITY_CLIENT_ID
         self.client_secret = settings.MOBILITY_CLIENT_SECRET
+        self.scope = settings.MOBILITY_SCOPE
         
         self._cache_key = "mobility:access_token"
         
@@ -96,6 +97,11 @@ class TokenManager:
             "grant_type": "client_credentials",
             "audience": "none"
         }
+
+        # Add scope if configured
+        if self.scope:
+            payload["scope"] = self.scope
+            logger.debug(f"Requesting token with scope: {self.scope}")
         
         headers = {
             "Content-Type": "application/x-www-form-urlencoded"
