@@ -1,0 +1,169 @@
+{
+  "entities": {
+    "Person": {
+      "properties": [
+        "PersonId",
+        "Name",
+        "Phone",
+        "Email"
+      ],
+      "relationships": {
+        "drives": "Vehicle",
+        "has_bookings": "Booking",
+        "works_for": "Tenant"
+      },
+      "description": "Korisnik sustava (vozač ili admin)"
+    },
+    "Vehicle": {
+      "properties": [
+        "VehicleId",
+        "LicensePlate",
+        "Model",
+        "Type"
+      ],
+      "relationships": {
+        "assigned_to": "Person",
+        "has_bookings": "Booking"
+      },
+      "description": "Vozilo koje se koristi za rezervacije"
+    },
+    "Booking": {
+      "properties": [
+        "BookingId",
+        "StartTime",
+        "EndTime",
+        "Status"
+      ],
+      "relationships": {
+        "for_vehicle": "Vehicle",
+        "made_by": "Person"
+      },
+      "description": "Rezervacija vozila"
+    },
+    "Tenant": {
+      "properties": [
+        "TenantId",
+        "Name",
+        "Address"
+      ],
+      "relationships": {
+        "has_users": "Person",
+        "manages": "Vehicle"
+      },
+      "description": "Organizacija koja koristi vozila"
+    },
+    "Case": {
+      "properties": [
+        "CaseId",
+        "Description",
+        "Status"
+      ],
+      "relationships": {
+        "related_to": "Vehicle",
+        "assigned_to": "Person"
+      },
+      "description": "Slučaj vezan uz vozilo ili korisnika"
+    },
+    "Registration": {
+      "properties": [
+        "RegistrationId",
+        "VehicleId",
+        "RegistrationDate"
+      ],
+      "relationships": {
+        "for_vehicle": "Vehicle"
+      },
+      "description": "Registracija vozila"
+    }
+  },
+  "constraints": [
+    {
+      "name": "booking_no_overlap",
+      "description": "Vozilo ne može imati dvije rezervacije u isto vrijeme"
+    },
+    {
+      "name": "unique_vehicle_registration",
+      "description": "Svako vozilo može imati samo jednu registraciju po vremenskom periodu"
+    }
+  ],
+  "entity_resolution": {
+    "my_vehicle": "Vehicle assigned to current Person",
+    "moje vozilo": "Vehicle assigned to current Person",
+    "my_booking": "Booking made by current Person",
+    "moje rezervacije": "Booking made by current Person"
+  },
+  "generated_at": "2025-12-26T11:52:37.370779",
+  "detected_entities": [
+    "",
+    "AcquiringType",
+    "ActivityStatus",
+    "ActivityType",
+    "Asset",
+    "AssignedTo",
+    "Assignee",
+    "Assignment",
+    "Availability",
+    "Calendar",
+    "Case",
+    "CaseStatus",
+    "CaseType",
+    "Category",
+    "Company",
+    "CompanyCal",
+    "Contract",
+    "CostCenter",
+    "Driver",
+    "DriverCal",
+    "Equipment",
+    "EquipmentAvailability",
+    "EquipmentType",
+    "ExpenseCategory",
+    "ExpenseGroup",
+    "ExpenseType",
+    "External",
+    "File",
+    "GeneralStatus",
+    "Group",
+    "Legal",
+    "LinkedTenant",
+    "Metadata",
+    "OrgUnit",
+    "OrgUnitCal",
+    "ParentExpense",
+    "ParentOrgUnit",
+    "Partner",
+    "PartnerType",
+    "PeriodicActivityStatus",
+    "PeriodicActivityType",
+    "Person",
+    "PersonType",
+    "Pool",
+    "Provider",
+    "RaisedByAssignee",
+    "Role",
+    "Severity",
+    "Source",
+    "Status",
+    "Supplier",
+    "Team",
+    "Tenant",
+    "TenantOwner",
+    "TripType",
+    "Type",
+    "User",
+    "Vehicle",
+    "VehicleAsset",
+    "VehicleExternal",
+    "VehiclePool",
+    "VehicleStatus",
+    "VehicleType",
+    "company",
+    "document",
+    "equipmentType",
+    "invitation",
+    "partner",
+    "person",
+    "vehicle",
+    "vehicleType"
+  ]
+}

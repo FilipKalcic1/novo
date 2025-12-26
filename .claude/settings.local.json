@@ -10,7 +10,9 @@
       "Bash(find:*)",
       "Bash(docker-compose restart:*)",
       "Bash(docker volume:*)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(cat:*)",
+      "Bash(python -m scripts.generate_documentation:*)"
     ]
   }
 }

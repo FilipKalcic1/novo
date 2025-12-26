@@ -1,11 +1,13 @@
 """
 Search Engine - Semantic and keyword search for tool discovery.
-Version: 1.0
+Version: 2.0 (With Category-Based Search)
 
-Single responsibility: Find relevant tools using embeddings and scoring.
+Single responsibility: Find relevant tools using embeddings, categories, and scoring.
 """
 
+import json
 import logging
+import os
 import re
 from typing import Dict, List, Set, Tuple, Any, Optional
 
@@ -23,6 +25,26 @@ from services.patterns import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _load_json_file(filename: str) -> Optional[Dict]:
+    """Load JSON file from config or data directory."""
+    base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+
+    paths = [
+        os.path.join(base_path, "config", filename),
+        os.path.join(base_path, "data", filename),
+    ]
+
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load {path}: {e}")
+
+    return None
 
 
 class SearchEngine:
@@ -48,14 +70,56 @@ class SearchEngine:
 
     MAX_TOOLS_PER_RESPONSE = 12
 
+    # Category matching configuration
+    CATEGORY_CONFIG = {
+        "category_boost": 0.12,        # Boost for tools in matching category
+        "keyword_match_boost": 0.08,   # Boost for keyword matches
+        "documentation_boost": 0.10,   # Boost when query matches tool documentation
+        "training_match_boost": 0.15,  # Boost when similar to training examples
+    }
+
     def __init__(self):
-        """Initialize search engine with OpenAI client."""
+        """Initialize search engine with OpenAI client and category data."""
         self.openai = AsyncAzureOpenAI(
             azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
             api_key=settings.AZURE_OPENAI_API_KEY,
             api_version=settings.AZURE_OPENAI_API_VERSION
         )
-        logger.debug("SearchEngine initialized")
+
+        # Load category and documentation data
+        self._tool_categories = _load_json_file("tool_categories.json")
+        self._tool_documentation = _load_json_file("tool_documentation.json")
+        self._training_queries = _load_json_file("training_queries.json")
+
+        # Build reverse lookup: tool_id -> category
+        self._tool_to_category: Dict[str, str] = {}
+        self._category_keywords: Dict[str, Set[str]] = {}
+
+        if self._tool_categories and "categories" in self._tool_categories:
+            for cat_name, cat_data in self._tool_categories["categories"].items():
+                # Map each tool to its category
+                for tool_id in cat_data.get("tools", []):
+                    self._tool_to_category[tool_id] = cat_name
+
+                # Build category keyword sets
+                keywords = set()
+                keywords.update(cat_data.get("keywords_hr", []))
+                keywords.update(cat_data.get("keywords_en", []))
+                keywords.update(cat_data.get("typical_intents", []))
+                self._category_keywords[cat_name] = {k.lower() for k in keywords}
+
+            logger.info(f"📂 Loaded {len(self._tool_to_category)} tool→category mappings")
+        else:
+            logger.warning("Tool categories not loaded - category boosting disabled")
+
+        if self._tool_documentation:
+            logger.info(f"📄 Loaded documentation for {len(self._tool_documentation)} tools")
+
+        if self._training_queries:
+            training_count = len(self._training_queries.get("training_data", []))
+            logger.info(f"🎯 Loaded {training_count} training examples")
+
+        logger.debug("SearchEngine initialized (v2.0 with categories)")
 
     async def find_relevant_tools_with_scores(
         self,
@@ -120,6 +184,8 @@ class SearchEngine:
         # Apply scoring adjustments
         scored = self._apply_method_disambiguation(query, scored, tools)
         scored = self._apply_user_specific_boosting(query, scored, tools)
+        scored = self._apply_category_boosting(query, scored, tools)
+        scored = self._apply_documentation_boosting(query, scored)
         scored = self._apply_evaluation_adjustment(scored)
 
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -400,3 +466,147 @@ class SearchEngine:
 
         matches.sort(key=lambda x: x[0], reverse=True)
         return [op_id for _, op_id in matches[:top_k]]
+
+    def _apply_category_boosting(
+        self,
+        query: str,
+        scored: List[Tuple[float, str]],
+        tools: Dict[str, UnifiedToolDefinition]
+    ) -> List[Tuple[float, str]]:
+        """Boost tools that belong to categories matching the query."""
+        if not self._tool_to_category or not self._category_keywords:
+            return scored
+
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+
+        # Find matching categories based on keywords
+        matching_categories: Set[str] = set()
+
+        for cat_name, keywords in self._category_keywords.items():
+            # Check for word overlap
+            if query_words & keywords:
+                matching_categories.add(cat_name)
+                continue
+
+            # Check for substring matches
+            for keyword in keywords:
+                if len(keyword) >= 4 and keyword in query_lower:
+                    matching_categories.add(cat_name)
+                    break
+
+        if matching_categories:
+            logger.info(f"📂 Query matches categories: {matching_categories}")
+
+        config = self.CATEGORY_CONFIG
+        category_boost = config["category_boost"]
+        keyword_boost = config["keyword_match_boost"]
+
+        adjusted = []
+        for score, op_id in scored:
+            tool_category = self._tool_to_category.get(op_id)
+
+            if tool_category and tool_category in matching_categories:
+                new_score = score + category_boost
+                adjusted.append((new_score, op_id))
+            else:
+                # Check for keyword matches in operation_id
+                op_lower = op_id.lower()
+                keyword_match = any(
+                    word in op_lower
+                    for word in query_words
+                    if len(word) >= 4
+                )
+                if keyword_match:
+                    adjusted.append((score + keyword_boost, op_id))
+                else:
+                    adjusted.append((score, op_id))
+
+        return adjusted
+
+    def _apply_documentation_boosting(
+        self,
+        query: str,
+        scored: List[Tuple[float, str]]
+    ) -> List[Tuple[float, str]]:
+        """Boost tools whose documentation matches the query."""
+        if not self._tool_documentation:
+            return scored
+
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+
+        config = self.CATEGORY_CONFIG
+        doc_boost = config["documentation_boost"]
+        training_boost = config["training_match_boost"]
+
+        # Check for training example matches
+        matched_tools_from_training: Set[str] = set()
+        if self._training_queries:
+            training_data = self._training_queries.get("training_data", [])
+            for example in training_data:
+                example_query = example.get("query", "").lower()
+                # Simple word overlap matching
+                example_words = set(example_query.split())
+                overlap = len(query_words & example_words)
+                if overlap >= 2 or (overlap >= 1 and len(query_words) <= 3):
+                    matched_tools_from_training.add(example.get("primary_tool", ""))
+                    for alt in example.get("alternative_tools", []):
+                        matched_tools_from_training.add(alt)
+
+        if matched_tools_from_training:
+            logger.info(f"🎯 Training matches: {list(matched_tools_from_training)[:5]}")
+
+        adjusted = []
+        for score, op_id in scored:
+            boost = 0.0
+
+            # Check training example matches
+            if op_id in matched_tools_from_training:
+                boost += training_boost
+
+            # Check documentation matches
+            doc = self._tool_documentation.get(op_id, {})
+
+            # Match against example_queries
+            example_queries = doc.get("example_queries", [])
+            for example in example_queries:
+                example_lower = example.lower()
+                example_words = set(example_lower.split())
+                if query_words & example_words:
+                    boost += doc_boost * 0.5
+                    break
+
+            # Match against when_to_use
+            when_to_use = doc.get("when_to_use", [])
+            for use_case in when_to_use:
+                use_case_lower = use_case.lower()
+                if any(word in use_case_lower for word in query_words if len(word) >= 4):
+                    boost += doc_boost * 0.3
+                    break
+
+            # Match against purpose
+            purpose = doc.get("purpose", "").lower()
+            if any(word in purpose for word in query_words if len(word) >= 4):
+                boost += doc_boost * 0.2
+
+            adjusted.append((score + boost, op_id))
+
+        return adjusted
+
+    def get_tool_documentation(self, tool_id: str) -> Optional[Dict[str, Any]]:
+        """Get documentation for a specific tool."""
+        if not self._tool_documentation:
+            return None
+        return self._tool_documentation.get(tool_id)
+
+    def get_tool_category(self, tool_id: str) -> Optional[str]:
+        """Get category for a specific tool."""
+        return self._tool_to_category.get(tool_id)
+
+    def get_tools_in_category(self, category_name: str) -> List[str]:
+        """Get all tools in a category."""
+        if not self._tool_categories or "categories" not in self._tool_categories:
+            return []
+        cat_data = self._tool_categories["categories"].get(category_name, {})
+        return cat_data.get("tools", [])

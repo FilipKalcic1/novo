@@ -330,6 +330,26 @@ class FlowHandler:
             translator = get_error_translator()
             return translator.get_user_message(error, tool_name)
 
+    # Semantički opisi parametara za AI extraction
+    PARAM_DESCRIPTIONS = {
+        # Mileage parameters
+        "Value": "Kilometraža vozila u km (npr. 14000, 50000)",
+        "mileage": "Kilometraža vozila u km",
+        "kilometraža": "Udaljenost u kilometrima",
+        "Mileage": "Trenutna kilometraža vozila",
+        # Vehicle parameters
+        "VehicleId": "ID vozila (UUID format)",
+        "vehicleId": "ID vozila",
+        # Time parameters
+        "from": "Početno vrijeme (datum i sat, npr. 'sutra u 9:00')",
+        "to": "Završno vrijeme (datum i sat, npr. 'sutra u 17:00')",
+        "FromTime": "Početno vrijeme rezervacije",
+        "ToTime": "Završno vrijeme rezervacije",
+        # Other parameters
+        "Description": "Opis situacije ili napomena",
+        "description": "Tekstualni opis",
+    }
+
     async def handle_gathering(
         self,
         sender: str,
@@ -341,9 +361,10 @@ class FlowHandler:
         """Handle parameter gathering."""
         missing = conv_manager.get_missing_params()
 
+        # Dodaj semantički kontekst za svaki parametar
         extracted = await self.ai.extract_parameters(
             text,
-            [{"name": p, "type": "string", "description": ""} for p in missing]
+            [{"name": p, "type": "string", "description": self.PARAM_DESCRIPTIONS.get(p, p)} for p in missing]
         )
 
         await conv_manager.add_parameters(extracted)
@@ -372,12 +393,22 @@ class FlowHandler:
     def _build_param_prompt(self, missing: List[str]) -> str:
         """Build prompt for missing parameters."""
         prompts = {
+            # Time parameters
             "from": "Od kada vam treba? (npr. 'sutra u 9:00')",
             "to": "Do kada? (npr. 'sutra u 17:00')",
             "FromTime": "Od kada vam treba?",
             "ToTime": "Do kada?",
-            "Description": "Mozete li opisati situaciju?",
-            "VehicleId": "Koje vozilo zelite?"
+            # Description
+            "Description": "Možete li opisati situaciju?",
+            "description": "Opišite situaciju",
+            # Vehicle
+            "VehicleId": "Koje vozilo želite?",
+            "vehicleId": "Koje vozilo?",
+            # Mileage parameters
+            "Value": "Kolika je kilometraža? (npr. '14000 km')",
+            "mileage": "Kolika je trenutna kilometraža?",
+            "Mileage": "Unesite kilometražu vozila",
+            "kilometraža": "Koliko kilometara ima vozilo?",
         }
 
         if len(missing) == 1:

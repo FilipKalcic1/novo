@@ -284,10 +284,10 @@ class ResponseFormatter:
         """Format single vehicle."""
         name = data.get("FullVehicleName") or data.get("DisplayName") or "Vozilo"
         plate = data.get("LicencePlate") or data.get("Plate") or "N/A"
-        mileage = data.get("Mileage") or data.get("CurrentMileage")
+        mileage = data.get("Mileage") or data.get("CurrentMileage") or data.get("LastMileage")
         vin = data.get("VIN")
         driver = data.get("Driver") or data.get("DriverName")
-        
+
         lines = [f"🚗 **{name}**\n"]
         lines.append(f"📋 Registracija: {plate}")
         
@@ -304,7 +304,7 @@ class ResponseFormatter:
         """Format master data."""
         name = data.get("FullVehicleName") or data.get("DisplayName") or "Vozilo"
         plate = data.get("LicencePlate") or data.get("Plate") or "N/A"
-        mileage = data.get("Mileage") or data.get("CurrentMileage")
+        mileage = data.get("Mileage") or data.get("CurrentMileage") or data.get("LastMileage")
         vin = data.get("VIN")
         driver = data.get("Driver") or data.get("DriverName")
         
@@ -364,7 +364,7 @@ class ResponseFormatter:
     
     def _is_vehicle(self, data: Dict) -> bool:
         """Check if data is vehicle."""
-        fields = {"VehicleId", "LicencePlate", "Plate", "VIN", "Mileage", "FullVehicleName"}
+        fields = {"VehicleId", "LicencePlate", "Plate", "VIN", "Mileage", "LastMileage", "FullVehicleName"}
         return bool(fields & set(data.keys()))
     
     def _is_person(self, data: Dict) -> bool:
@@ -428,7 +428,7 @@ class ResponseFormatter:
 
         # MILEAGE query
         if any(kw in q for kw in ["kilometraž", "mileage", "koliko km", "koliko kilometara", "km ima"]):
-            mileage = data.get("Mileage") or data.get("CurrentMileage")
+            mileage = data.get("Mileage") or data.get("CurrentMileage") or data.get("LastMileage")
             if mileage:
                 return (
                     f"🚗 **{name}**\n"
@@ -529,7 +529,7 @@ class ResponseFormatter:
         if plate:
             lines.append(f"📋 Registracija: {plate}")
 
-        mileage = data.get("Mileage") or data.get("CurrentMileage")
+        mileage = data.get("Mileage") or data.get("CurrentMileage") or data.get("LastMileage")
         if mileage:
             lines.append(f"📏 Kilometraža: {mileage:,} km")
 

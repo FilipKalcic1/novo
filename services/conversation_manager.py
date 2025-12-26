@@ -27,6 +27,28 @@ class ConversationState(str, Enum):
     COMPLETED = "completed"
 
 
+# Mapiranje sinonima parametara - rješava problem kad AI izvuče "mileage" ali missing_params ima "Value"
+KEY_ALIASES = {
+    # Mileage variations
+    "mileage": ["kilometraža", "km", "Value", "Mileage", "mileage_value"],
+    "Value": ["mileage", "kilometraža", "km", "Mileage"],
+    "kilometraža": ["mileage", "Value", "km", "Mileage"],
+    "Mileage": ["mileage", "Value", "kilometraža", "km"],
+    "km": ["mileage", "Value", "kilometraža", "Mileage"],
+    # Time variations
+    "from": ["FromTime", "start", "od", "from_time"],
+    "FromTime": ["from", "start", "od"],
+    "to": ["ToTime", "end", "do", "to_time"],
+    "ToTime": ["to", "end", "do"],
+    # Description variations
+    "description": ["Description", "opis", "napomena"],
+    "Description": ["description", "opis"],
+    # Vehicle variations
+    "vehicleId": ["VehicleId", "vehicle_id"],
+    "VehicleId": ["vehicleId", "vehicle_id"],
+}
+
+
 @dataclass
 class ConversationContext:
     """Context for conversation - serializable."""
@@ -184,18 +206,23 @@ class ConversationManager:
         await self.save()
     
     async def add_parameters(self, params: Dict[str, Any]):
-        """Add collected parameters."""
+        """Add collected parameters with alias resolution."""
         for key, value in params.items():
             if value is not None:
                 self.context.parameters[key] = value
-                
-                if key in self.context.missing_params:
-                    self.context.missing_params.remove(key)
-        
+
+                # Ukloni iz missing_params - provjeri i aliase
+                # Ovo rješava problem kad AI izvuče "mileage" ali missing_params ima "Value"
+                keys_to_check = [key] + KEY_ALIASES.get(key, [])
+                for k in keys_to_check:
+                    if k in self.context.missing_params:
+                        self.context.missing_params.remove(k)
+                        logger.debug(f"Removed '{k}' from missing_params (matched via '{key}')")
+
         self.context.last_updated = datetime.utcnow().isoformat()
         await self.save()
-        
-        logger.debug(f"Parameters: {list(self.context.parameters.keys())}")
+
+        logger.debug(f"Parameters: {list(self.context.parameters.keys())}, Still missing: {self.context.missing_params}")
     
     async def set_displayed_items(self, items: List[Dict]):
         """Store displayed items and transition to selecting."""
