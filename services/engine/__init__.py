@@ -862,30 +862,84 @@ class MessageEngine:
             ]
         )
 
+        # Try to get vehicle from multiple sources
         vehicle = user_context.get("vehicle", {})
         vehicle_id = vehicle.get("id")
+        vehicle_name = vehicle.get("name", "")
+        plate = vehicle.get("plate", "")
+
+        # 1. Check if we have vehicle from recent booking/context
+        if not vehicle_id and hasattr(conv_manager.context, 'tool_outputs'):
+            vehicle_id = conv_manager.context.tool_outputs.get("VehicleId")
+            if vehicle_id:
+                # Try to get name from stored vehicles
+                all_vehicles = conv_manager.context.tool_outputs.get("all_available_vehicles", [])
+                for v in all_vehicles:
+                    if v.get("Id") == vehicle_id:
+                        vehicle_name = v.get("DisplayName") or v.get("FullVehicleName") or "Vozilo"
+                        plate = v.get("LicencePlate") or ""
+                        break
+
+        # 2. If still no vehicle, fetch first available one
+        if not vehicle_id:
+            try:
+                from services.api_gateway import HttpMethod
+                from datetime import datetime, timedelta
+
+                tomorrow = datetime.now() + timedelta(days=1)
+                result = await self.gateway.execute(
+                    method=HttpMethod.GET,
+                    path="/vehiclemgt/AvailableVehicles",
+                    params={
+                        "from": tomorrow.replace(hour=8, minute=0).isoformat(),
+                        "to": tomorrow.replace(hour=17, minute=0).isoformat()
+                    }
+                )
+
+                if result.success and result.data:
+                    data = result.data.get("Data", result.data) if isinstance(result.data, dict) else result.data
+                    vehicles = data if isinstance(data, list) else [data]
+
+                    if vehicles:
+                        v = vehicles[0]
+                        vehicle_id = v.get("Id")
+                        vehicle_name = v.get("DisplayName") or v.get("FullVehicleName") or "Vozilo"
+                        plate = v.get("LicencePlate") or ""
+
+                        # Store for later
+                        if hasattr(conv_manager.context, 'tool_outputs'):
+                            conv_manager.context.tool_outputs["VehicleId"] = vehicle_id
+                            conv_manager.context.tool_outputs["all_available_vehicles"] = vehicles
+            except Exception as e:
+                logger.warning(f"Failed to fetch vehicles for mileage: {e}")
 
         if not vehicle_id:
             return (
-                "Trenutno nemate dodijeljeno vozilo.\n"
-                "Ne mogu unijeti kilometražu bez vozila."
+                "Nije pronađeno vozilo za unos kilometraže.\n"
+                "Pokušajte prvo rezervirati vozilo ili kontaktirajte podršku."
             )
 
         if not mileage_params.get("Value"):
-            # Start gathering flow
+            # Start gathering flow - store vehicle info
             await conv_manager.start_flow(
                 flow_name="mileage_input",
                 tool="post_AddMileage",
                 required_params=["Value"]
             )
+            await conv_manager.add_parameters({
+                "VehicleId": vehicle_id,
+                "_vehicle_name": vehicle_name,
+                "_vehicle_plate": plate
+            })
             await conv_manager.save()
 
-            return "Kolika je trenutna kilometraža? (npr. '14000 km')"
+            return (
+                f"Unosim kilometražu za **{vehicle_name}** ({plate}).\n\n"
+                f"Kolika je trenutna kilometraža? _(npr. '14500')_"
+            )
 
         # Have all params - ask for confirmation
         value = mileage_params["Value"]
-        vehicle_name = vehicle.get("name", "vozilo")
-        plate = vehicle.get("plate", "")
 
         await conv_manager.add_parameters({
             "VehicleId": vehicle_id,

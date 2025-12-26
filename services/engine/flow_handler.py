@@ -484,16 +484,81 @@ class FlowHandler:
                 if text.strip() and len(text.strip()) < 50:  # Razumna duljina za datum
                     extracted[param] = text.strip()
                     logger.info(f"GATHERING FALLBACK: Using raw text '{text.strip()}' as {param}")
+            # Za Value (kilometraža), pokušaj parsirati broj
+            elif param.lower() in ['value', 'mileage']:
+                import re
+                numbers = re.findall(r'\d+', text)
+                if numbers:
+                    extracted[param] = int(numbers[0])
+                    logger.info(f"GATHERING FALLBACK: Extracted number '{numbers[0]}' as {param}")
 
         await conv_manager.add_parameters(extracted)
 
         if conv_manager.has_all_required_params():
             logger.info("GATHERING: All params collected, continuing flow")
+
+            # CRITICAL: Handle flow completion based on flow type
+            current_flow = conv_manager.get_current_flow()
+            tool_name = conv_manager.get_current_tool()
+            params = conv_manager.get_parameters()
+
+            # MILEAGE INPUT: Show confirmation
+            if current_flow == "mileage_input" and tool_name == "post_AddMileage":
+                return await self._show_mileage_confirmation(params, conv_manager)
+
+            # CASE CREATION: Show confirmation
+            if current_flow == "case_creation" and tool_name == "post_AddCase":
+                return await self._show_case_confirmation(params, user_context, conv_manager)
+
+            # Default: let new request handler continue (e.g., booking)
             return await handle_new_request_fn(sender, text, user_context, conv_manager)
 
         still_missing = conv_manager.get_missing_params()
         logger.info(f"GATHERING: Still missing {still_missing}")
         return self._build_param_prompt(still_missing)
+
+    async def _show_mileage_confirmation(self, params: Dict[str, Any], conv_manager) -> str:
+        """Show mileage input confirmation."""
+        vehicle_name = params.get("_vehicle_name", "Vozilo")
+        plate = params.get("_vehicle_plate", "")
+        value = params.get("Value") or params.get("mileage") or params.get("Mileage")
+
+        message = (
+            f"**Potvrda unosa kilometraže:**\n\n"
+            f"Vozilo: {vehicle_name} ({plate})\n"
+            f"Kilometraža: {value} km\n\n"
+            f"_Potvrdite s 'Da' ili odustanite s 'Ne'._"
+        )
+
+        await conv_manager.request_confirmation(message)
+        await conv_manager.save()
+
+        return message
+
+    async def _show_case_confirmation(
+        self, params: Dict[str, Any], user_context: Dict[str, Any], conv_manager
+    ) -> str:
+        """Show case creation confirmation."""
+        subject = params.get("Subject", "Prijava slučaja")
+        description = params.get("Description") or params.get("Message", "")
+
+        vehicle = user_context.get("vehicle", {})
+        vehicle_name = vehicle.get("name", "")
+        plate = vehicle.get("plate", "")
+        vehicle_line = f"Vozilo: {vehicle_name} ({plate})\n" if vehicle_name else ""
+
+        message = (
+            f"**Potvrda prijave slučaja:**\n\n"
+            f"Naslov: {subject}\n"
+            f"{vehicle_line}"
+            f"Opis: {description}\n\n"
+            f"_Potvrdite s 'Da' ili odustanite s 'Ne'._"
+        )
+
+        await conv_manager.request_confirmation(message)
+        await conv_manager.save()
+
+        return message
 
     def _extract_items(self, data: Any) -> List[Dict]:
         """Extract items from API response."""

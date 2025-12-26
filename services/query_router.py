@@ -54,8 +54,8 @@ class QueryRouter:
             # === MILEAGE INPUT (must be BEFORE GET_MILEAGE to catch "unesi" first) ===
             {
                 "patterns": [
-                    r"unesi.*kilometra",
-                    r"upiši.*kilometra",
+                    r"unesi.*(km|kilometra)",
+                    r"upiši.*(km|kilometra)",
                     r"unos.*(km|kilometra)",
                     r"prijavi.*(km|kilometra)",
                     r"unesite.*(km|kilometra)",
@@ -64,7 +64,8 @@ class QueryRouter:
                     r"ho[cć]u.*unijeti.*(km|kilometra)",
                     r"želim.*unijeti.*(km|kilometra)",
                     r"trebam.*unijeti.*(km|kilometra)",
-                    r"unijeti.*kilometra",
+                    r"unijeti.*(km|kilometra)",
+                    r"unesi.*\d+",  # "unesi 15000" with number
                 ],
                 "intent": "INPUT_MILEAGE",
                 "tool": "post_AddMileage",
