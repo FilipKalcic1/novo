@@ -11009,36 +11009,57 @@
   },
   "get_AvailableVehicles": {
     "operation_id": "get_AvailableVehicles",
-    "purpose": "Ovaj endpoint omogućuje dohvaćanje svih dostupnih vozila na temelju parametara učitavanja.",
+    "purpose": "OVAJ ALAT TRAŽI SLOBODNA VOZILA za rezervaciju/booking. Vraća listu vozila koja su dostupna u zadanom periodu (od-do datuma). OVO JE PRVI KORAK u procesu rezervacije vozila.",
     "when_to_use": [
-      "Kada trebate pregledati dostupna vozila u određenom vremenskom okviru."
+      "Kada korisnik traži vozilo za rezervaciju ili najam",
+      "Kada korisnik pita: 'mogu li dobiti vozilo', 'treba mi auto', 'želim rezervirati vozilo', 'ima li slobodnih auta'",
+      "Kada korisnik navodi period: 'od sutra do petka', 'za vikend', 'od 16.12 do 17.12', 'sutra cijeli dan'",
+      "Kada korisnik započinje booking proces",
+      "UVIJEK prije kreiranja rezervacije - prvo provjeri dostupnost vozila!",
+      "Kada korisnik pita koliko ima slobodnih vozila",
+      "REQUIRED parametri: from (datum/vrijeme početka), to (datum/vrijeme kraja)"
     ],
     "when_not_to_use": [
-      "Kada ne trebate informacije o dostupnim vozilima."
+      "Kada korisnik traži informacije o vozilima koja su mu već dodijeljena (koristi get_VehicleAssignments)",
+      "Kada korisnik želi vidjeti postojeće rezervacije (koristi get_VehicleCalendar)",
+      "Kada korisnik traži opće podatke o vozilima (koristi get_Vehicles)"
     ],
     "prerequisites": [
-      "Morate imati pristup podacima o vozilima."
+      "Morate znati period rezervacije: from (od kada) i to (do kada)",
+      "Parametri moraju biti u formatu: YYYY-MM-DDTHH:mm:ss ili YYYY-MM-DD HH:mm"
     ],
     "output_fields_explained": {
-      "Id": "Jedinstveni identifikator vozila.",
-      "LicencePlate": "Registracijska oznaka vozila.",
+      "Id": "Jedinstveni identifikator vozila - POTREBAN za kreiranje rezervacije (VehicleId u post_VehicleCalendar)",
+      "LicencePlate": "Registracijska oznaka vozila (tablice)",
       "VIN": "Identifikacijski broj vozila.",
-      "DisplayName": "Prikazno ime vozila.",
+      "DisplayName": "Puno ime vozila - koristi ovo za prikaz korisniku",
       "VehicleTypeId": "Identifikator tipa vozila.",
-      "VehicleTypeName": "Naziv tipa vozila.",
+      "VehicleTypeName": "Naziv tipa vozila (npr. 'Osobni automobil', 'Kombi')",
       "PoolId": "Identifikator grupe vozila.",
       "PoolName": "Naziv grupe vozila."
     },
     "common_errors": {
-      "400": "Neispravan zahtjev zbog pogrešnih parametara.",
+      "400": "Neispravan zahtjev - provjerite format datuma (mora biti YYYY-MM-DDTHH:mm:ss)",
       "403": "Nemate dozvolu za pristup ovom resursu.",
       "404": "Zatraženi resurs nije pronađen."
     },
     "next_steps": [
-      "Pregledajte dostupna vozila i odaberite potrebna."
+      "Prikaži korisniku dostupna vozila (DisplayName, LicencePlate)",
+      "Pitaj korisnika koje vozilo želi ili ponudi prvo s liste",
+      "Nakon odabira pozovi post_VehicleCalendar za kreiranje rezervacije"
     ],
-    "related_tools": [],
-    "example_queries_hr": []
+    "related_tools": [
+      "post_VehicleCalendar"
+    ],
+    "example_queries_hr": [
+      "Mogu li dobiti vozilo sutra?",
+      "Treba mi auto od 16.12 do 17.12",
+      "Želim rezervirati vozilo za vikend",
+      "Ima li slobodnih vozila od ponedjeljka?",
+      "Trebam auto od sutra u 9 sati do prekosutra u 17 sati",
+      "Hoću rezervirati vozilo",
+      "Daj mi slobodna vozila za sljedeći tjedan"
+    ]
   },
   "get_AvailableVehicles_ProjectTo": {
     "operation_id": "get_AvailableVehicles_ProjectTo",
@@ -24011,44 +24032,63 @@
   },
   "post_VehicleCalendar": {
     "operation_id": "post_VehicleCalendar",
-    "purpose": "Ovaj endpoint služi za kreiranje novog unosa u kalendar vozila.",
+    "purpose": "OVAJ ALAT KREIRA REZERVACIJU (BOOKING) VOZILA. Ovo je KONAČNI KORAK u procesu rezervacije - poziva se NAKON što korisnik odabere vozilo i potvrdi rezervaciju.",
     "when_to_use": [
-      "Kada želite dodati novi unos u kalendar vozila.",
-      "Kada su svi potrebni podaci za unos dostupni."
+      "Kada korisnik POTVRDI rezervaciju vozila (kaže 'da', 'potvrđujem', 'rezerviraj', 'u redu')",
+      "SAMO nakon što je get_AvailableVehicles pozvan i korisnik odabrao vozilo",
+      "Kada korisnik završava booking proces i želi finalizirati rezervaciju",
+      "Kada imate sve potrebne podatke: VehicleId (iz get_AvailableVehicles), FromTime, ToTime, AssignedToId (person_id iz user_context)"
     ],
     "when_not_to_use": [
-      "Kada želite ažurirati postojeći unos."
+      "Kada korisnik još nije odabrao vozilo - prvo pozovi get_AvailableVehicles!",
+      "Kada korisnik samo traži informacije o vozilima (to je get_AvailableVehicles)",
+      "Kada korisnik želi ažurirati postojeću rezervaciju (koristi put_VehicleCalendar_id)",
+      "Kada korisnik želi obrisati rezervaciju (koristi delete_VehicleCalendar_id)",
+      "NIKADA bez prethodnog poziva get_AvailableVehicles - mora postojati lista dostupnih vozila!"
     ],
     "prerequisites": [
-      "Morate imati validan VehicleId, FromTime, AssignedToId i AssigneeType."
+      "OBAVEZNI payload parametri:",
+      "  - VehicleId: ID vozila iz get_AvailableVehicles rezultata",
+      "  - AssignedToId: person_id korisnika iz user_context",
+      "  - FromTime: Početno vrijeme rezervacije (format: YYYY-MM-DDTHH:mm:ss)",
+      "  - ToTime: Završno vrijeme rezervacije (format: YYYY-MM-DDTHH:mm:ss)",
+      "  - AssigneeType: UVIJEK 1 (Person)",
+      "  - EntryType: UVIJEK 0 (Booking)",
+      "OPCIONO:",
+      "  - Description: Tekstualni opis (odredište + svrha + broj putnika)"
     ],
     "output_fields_explained": {
-      "Id": "Jedinstveni identifikator unosa.",
-      "VehicleName": "Naziv vozila.",
-      "AssigneeName": "Ime osobe kojoj je vozilo dodijeljeno.",
-      "AssigneeCode": "Kod osobe kojoj je vozilo dodijeljeno.",
-      "AssigneeTypeName": "Naziv tipa entiteta koji je dodijeljen.",
-      "TenantId": "Identifikator zakupca.",
-      "VehicleId": "Jedinstveni identifikator vozila.",
-      "LicencePlate": "Registracijska oznaka vozila.",
-      "VIN": "Identifikacijski broj vozila.",
-      "VehicleTypeId": "Jedinstveni identifikator tipa vozila."
+      "Id": "Jedinstveni identifikator kreirane rezervacije - VRATI KORISNIKU kao potvrdu",
+      "VehicleName": "Naziv vozila - koristi za potvrdu rezervacije",
+      "AssigneeName": "Ime osobe koja je rezervirala vozilo",
+      "AssigneeCode": "Kod osobe",
+      "AssigneeTypeName": "Tip entiteta (Person)",
+      "TenantId": "Identifikator zakupca",
+      "VehicleId": "ID vozila",
+      "LicencePlate": "Registracijske tablice - prikaži korisniku u potvrdi",
+      "VIN": "VIN broj vozila",
+      "VehicleTypeId": "ID tipa vozila"
     },
     "common_errors": {
-      "400": "Neispravan zahtjev, nedostaju obavezni podaci.",
-      "403": "Nemate dozvolu za kreiranje unosa.",
-      "404": "Vozilo nije pronađeno."
+      "400": "Neispravan zahtjev - provjeri da li su svi obavezni parametri prisutni i u ispravnom formatu",
+      "403": "Nemate dozvolu za kreiranje rezervacije - provjeri permisije korisnika",
+      "404": "Vozilo nije pronađeno - provjeri da li je VehicleId ispravan",
+      "409": "Vozilo je već rezervirano u tom periodu - ponudi korisniku drugo vozilo ili drugi termin"
     },
     "next_steps": [
-      "Provjerite odgovor i potvrdite da je unos uspješno kreiran."
+      "Prikaži korisniku potvrdu rezervacije: ime vozila, tablice, period (FromTime -> ToTime)",
+      "Pohrani booking ID (iz response.Id) za eventualni cancel/update",
+      "Obavijesti korisnika da je rezervacija uspješna"
     ],
     "related_tools": [
-      "Kalendar vozila",
-      "Upravljanje vozilima"
+      "get_AvailableVehicles"
     ],
     "example_queries_hr": [
-      "Dodaj novo vozilo u kalendar.",
-      "Kreiraj unos za vozilo s ID-om 123."
+      "Da, želim rezervirati to vozilo",
+      "Potvrđujem rezervaciju",
+      "U redu, rezerviraj",
+      "Da, potvrđujem",
+      "Rezerviraj mi to vozilo"
     ]
   },
   "delete_VehicleCalendar": {

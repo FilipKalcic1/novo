@@ -16,6 +16,9 @@ from services.tool_contracts import UnifiedToolDefinition, DependencyGraph
 
 logger = logging.getLogger(__name__)
 
+# Cache version - increment when tool_categories.json or other config changes require cache rebuild
+CACHE_VERSION = "2.2"  # v2.2: FORCE rebuild with enhanced booking descriptions
+
 # Cache file paths
 CACHE_DIR = Path.cwd() / ".cache"
 EMBEDDINGS_CACHE_FILE = CACHE_DIR / "tool_embeddings.json"
@@ -85,6 +88,12 @@ class CacheManager:
 
             if "swagger_sources" not in manifest:
                 logger.warning("Cache corrupted: manifest missing swagger_sources")
+                return False
+
+            # Check cache version
+            cached_version = manifest.get("cache_version")
+            if cached_version != CACHE_VERSION:
+                logger.info(f"Cache invalid: version mismatch (cached={cached_version}, current={CACHE_VERSION})")
                 return False
 
             # Check if sources match
@@ -195,6 +204,7 @@ class CacheManager:
             manifest = {
                 "version": "2.0",
                 "timestamp": datetime.utcnow().isoformat(),
+                "cache_version": CACHE_VERSION,
                 "swagger_sources": swagger_sources
             }
             await asyncio.to_thread(

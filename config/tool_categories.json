@@ -1330,15 +1330,13 @@
         "Retrieve vehicle metadata"
       ],
       "tools": [
-        "get_AvailableVehicles",
-        "get_AvailableVehicles_ProjectTo",
         "get_ExpensesInputHelper_CompanyVehicles_companyId_date",
         "get_Vehicles_id_metadata",
         "get_Vehicles_ProjectTo",
         "get_Vehicles_Agg",
         "get_Vehicles_GroupBy"
       ],
-      "tool_count": 7
+      "tool_count": 5
     },
     "booking_management": {
       "name": "booking_management",
@@ -2130,9 +2128,11 @@
         "get_LatestVehicleCalendar_id_metadata",
         "get_LatestVehicleCalendar_ProjectTo",
         "get_LatestVehicleCalendar_Agg",
-        "get_LatestVehicleCalendar_GroupBy"
+        "get_LatestVehicleCalendar_GroupBy",
+        "get_AvailableVehicles",
+        "get_AvailableVehicles_ProjectTo"
       ],
-      "tool_count": 9
+      "tool_count": 11
     },
     "vehicle_contracts": {
       "name": "vehicle_contracts",
@@ -3313,8 +3313,8 @@
     "get_AvailabilityProjection_ProjectTo": "availability_management",
     "get_AvailabilityProjection_Agg": "availability_management",
     "get_AvailabilityProjection_GroupBy": "availability_management",
-    "get_AvailableVehicles": "vehicle_info",
-    "get_AvailableVehicles_ProjectTo": "vehicle_info",
+    "get_AvailableVehicles": "vehicle_calendar",
+    "get_AvailableVehicles_ProjectTo": "vehicle_calendar",
     "get_AverageFuelExpensesAndMileages_from_to": "mileage_tracking",
     "get_AverageFuelExpensesAndMileages_from_to_ProjectTo": "mileage_tracking",
     "get_AverageFuelExpensesAndMileages_from_to_Agg": "mileage_tracking",

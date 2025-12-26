@@ -163,6 +163,13 @@ PRAVILA:
 3. Provjeri koje alate možeš koristiti i što im treba
 4. Napravi plan koraka (max 3 koraka)
 
+KRITIČNO - ODABIR ALATA PO SCORE-u:
+- Svaki alat ima SCORE (0.00 do 1.00) koji pokazuje kvalitetu
+- Score se računa iz: uspješnosti, permisija, brzine
+- UVIJEK KORISTI ALAT S NAJVIŠIM SCORE-om kao prvi izbor!
+- NIKADA ne koristi alat sa score < 0.30 - takvi alati ne rade ili nemaju permisije
+- Ako najbolji alat ima score > 0.80, koristi njega i ne razmišljaj o drugim alatima
+
 TIPOVI KORAKA:
 - execute_tool: Pozovi API alat
 - ask_user: Pitaj korisnika za podatak
@@ -186,13 +193,16 @@ PRIMJERI:
 
 Upit: "Kolika mi je kilometraža?"
 Kontekst: vehicle_id: abc-123
+Alati:
+  - get_MasterData (score: 1.00): Dohvaća sve podatke vozila uključujući kilometražu
+  - get_LatestMileageReports (score: 0.15): FORBIDDEN - nema permisije
 {
   "understanding": "Korisnik želi znati kilometražu svog vozila",
   "is_simple": true,
   "has_all_data": true,
   "missing_data": [],
   "steps": [
-    {"step": 1, "type": "execute_tool", "tool": "get_MasterData", "reason": "dohvati podatke vozila s kilometražom"}
+    {"step": 1, "type": "execute_tool", "tool": "get_MasterData", "reason": "najbolji score (1.00) i ima sve potrebne podatke"}
   ],
   "direct_response": null
 }

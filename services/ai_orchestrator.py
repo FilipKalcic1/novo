@@ -141,7 +141,8 @@ class AIOrchestrator:
         final_messages.extend(filtered_conversation)
 
         # NEW v12.0: Apply Token Budgeting (trim tools if top match is excellent)
-        trimmed_tools = self._apply_token_budgeting(tools, tool_scores)
+        # CRITICAL FIX v15.1: Pass forced_tool to prevent mismatch
+        trimmed_tools = self._apply_token_budgeting(tools, tool_scores, forced_tool)
 
         call_args = {
             "model": self.model,
@@ -154,12 +155,24 @@ class AIOrchestrator:
             call_args["tools"] = trimmed_tools
 
             # ACTION-FIRST PROTOCOL: Force specific tool if similarity >= ACTION_THRESHOLD
+            # CRITICAL FIX v15.1: Validate forced_tool is actually in trimmed_tools
             if forced_tool:
-                call_args["tool_choice"] = {
-                    "type": "function",
-                    "function": {"name": forced_tool}
-                }
-                logger.info(f"Forced tool call: {forced_tool} (similarity >= {settings.ACTION_THRESHOLD})")
+                # Check if forced_tool exists in trimmed_tools
+                tool_names_in_list = [t.get("function", {}).get("name") for t in trimmed_tools]
+
+                if forced_tool in tool_names_in_list:
+                    call_args["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": forced_tool}
+                    }
+                    logger.info(f"Forced tool call: {forced_tool} (similarity >= {settings.ACTION_THRESHOLD})")
+                else:
+                    # Forced tool not in trimmed list - fall back to auto
+                    logger.warning(
+                        f"Forced tool '{forced_tool}' not in trimmed tools list "
+                        f"({tool_names_in_list}). Falling back to 'auto' selection."
+                    )
+                    call_args["tool_choice"] = "auto"
             else:
                 call_args["tool_choice"] = "auto"
 
@@ -281,13 +294,17 @@ class AIOrchestrator:
     def _apply_token_budgeting(
         self,
         tools: Optional[List[Dict]],
-        tool_scores: Optional[List[Dict]]
+        tool_scores: Optional[List[Dict]],
+        forced_tool: Optional[str] = None
     ) -> Optional[List[Dict]]:
         """
         Apply token budgeting - trim tools if top match is excellent.
 
         NEW v12.0: If best tool score >= SINGLE_TOOL_THRESHOLD (0.98),
         send only that tool to LLM. This saves ~80% of token cost for tool descriptions.
+
+        CRITICAL FIX v15.1: If forced_tool is specified and differs from best_match,
+        don't apply SINGLE TOOL MODE to ensure forced_tool is in the list.
 
         CRITICAL REQUIREMENTS:
         1. tools and tool_scores MUST be in the SAME ORDER (sorted by score DESC)
@@ -297,6 +314,7 @@ class AIOrchestrator:
         Args:
             tools: List of tool schemas (sorted by score DESC)
             tool_scores: List of {name, score, ...} dicts (sorted by score DESC)
+            forced_tool: Optional tool name that will be forced in execution
 
         Returns:
             Trimmed list of tools (maintains sort order)
@@ -327,28 +345,65 @@ class AIOrchestrator:
         best = tool_scores[0] if tool_scores else None
 
         if best and best.get("score", 0) >= SINGLE_TOOL_THRESHOLD:
-            # Excellent match - send only this tool
             best_name = best.get("name")
 
-            # Find matching tool by name
-            single_tool = next(
-                (t for t in tools if t.get("function", {}).get("name") == best_name),
-                None
-            )
-
-            if single_tool:
+            # CRITICAL FIX v15.1: Check if forced_tool conflicts with best match
+            if forced_tool and forced_tool != best_name:
                 logger.info(
-                    f" Token budget: SINGLE TOOL MODE - "
-                    f"{best_name} (score={best.get('score'):.3f} >= {SINGLE_TOOL_THRESHOLD})"
+                    f" Token budget: Skipping SINGLE TOOL MODE - forced_tool '{forced_tool}' "
+                    f"differs from best_match '{best_name}' (score={best.get('score'):.3f})"
                 )
-                return [single_tool]
+                # Don't apply SINGLE TOOL MODE - let it fall through to normal trimming
             else:
-                logger.error(
-                    f" Token budgeting: Best tool '{best_name}' not found in tools list! "
-                    f"Available tools: {[t.get('function', {}).get('name') for t in tools]}"
+                # Excellent match - send only this tool
+                # (or forced_tool matches best, so it's safe)
+                single_tool = next(
+                    (t for t in tools if t.get("function", {}).get("name") == best_name),
+                    None
                 )
+
+                if single_tool:
+                    logger.info(
+                        f" Token budget: SINGLE TOOL MODE - "
+                        f"{best_name} (score={best.get('score'):.3f} >= {SINGLE_TOOL_THRESHOLD})"
+                    )
+                    return [single_tool]
+                else:
+                    logger.error(
+                        f" Token budgeting: Best tool '{best_name}' not found in tools list! "
+                        f"Available tools: {[t.get('function', {}).get('name') for t in tools]}"
+                    )
 
         # Apply limit (tools already sorted by score DESC)
+        # CRITICAL FIX v15.1: Ensure forced_tool is included if specified
+        if forced_tool:
+            # Check if forced_tool is in the list
+            tool_names = [t.get("function", {}).get("name") for t in tools]
+
+            if forced_tool in tool_names:
+                forced_tool_obj = next(
+                    (t for t in tools if t.get("function", {}).get("name") == forced_tool),
+                    None
+                )
+
+                if forced_tool_obj:
+                    # Ensure forced_tool is in the trimmed list
+                    trimmed = tools[:MAX_TOOLS_FOR_LLM]
+
+                    if forced_tool_obj not in trimmed:
+                        # Replace last tool with forced_tool to ensure it's included
+                        logger.info(
+                            f" Token budget: Adding forced_tool '{forced_tool}' to trimmed list"
+                        )
+                        trimmed = trimmed[:-1] + [forced_tool_obj]
+
+                    return trimmed
+            else:
+                logger.warning(
+                    f"Token budgeting: forced_tool '{forced_tool}' not found in tools list. "
+                    f"Available: {tool_names}"
+                )
+
         if len(tools) > MAX_TOOLS_FOR_LLM:
             logger.info(
                 f"Token budget: Trimming {len(tools)} → {MAX_TOOLS_FOR_LLM} tools "
@@ -548,22 +603,33 @@ class AIOrchestrator:
         system = f"""Izvuci parametre iz korisnikove poruke.
 Vrati JSON objekt s vrijednostima. Koristi null za nedostajuće parametre.
 
+⚠️ KRITIČNO - NE IZMIŠLJAJ DATUME:
+- AKO korisnik NIJE NAVEO datum/vrijeme - vrati null!
+- NE pretpostavljaj današnji datum!
+- NE dodavaj default vrijednosti za from/to/FromTime/ToTime!
+- Samo ako korisnik EKSPLICITNO kaže "danas" ili "sutra" - onda koristi datum
+
 Parametri:
 {param_desc}
 
-Datumski kontekst:
+Datumski kontekst (KORISTI SAMO ako korisnik EKSPLICITNO spomene):
 - Danas: {today.strftime('%Y-%m-%d')} ({today.strftime('%A')})
 - Sutra: {tomorrow.strftime('%Y-%m-%d')}
 
 Format vremena: ISO 8601 (YYYY-MM-DDTHH:MM:SS)
 
-Hrvatske riječi:
-- "sutra" = tomorrow
-- "danas" = today
+Hrvatske riječi za vrijeme:
+- "sutra" = tomorrow (SAMO ako korisnik kaže "sutra")
+- "danas" = today (SAMO ako korisnik kaže "danas")
+- "prekosutra" = day after tomorrow (+2 dana od danas)
 - "od X do Y" = from X to Y
 - "ujutro" = 08:00
 - "popodne" = 14:00
+- "navečer" = 18:00
 - "cijeli dan" = 08:00 do 18:00
+
+VAŽNO: Ako korisnik daje samo vrijeme/datum kao odgovor (npr. "17:00" ili "prekosutra 9:00"),
+to je vjerojatno odgovor na prethodno pitanje. Koristi taj datum/vrijeme za traženi parametar.
 
 Vrati SAMO JSON, bez drugog teksta."""
         
