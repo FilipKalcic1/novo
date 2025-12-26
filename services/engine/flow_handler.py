@@ -374,7 +374,7 @@ class FlowHandler:
                 )
 
             # Mileage update success message
-            if tool_name == "post_Mileage":
+            if tool_name == "post_AddMileage":
                 value = params.get("Value", "")
                 return (
                     f"**Kilometraža uspješno unesena!**\n\n"

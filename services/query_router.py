@@ -156,7 +156,7 @@ class QueryRouter:
                     r"ažuriraj.*km",
                 ],
                 "intent": "INPUT_MILEAGE",
-                "tool": "post_Mileage",
+                "tool": "post_AddMileage",
                 "extract_fields": [],
                 "response_template": None,
                 "flow_type": "mileage_input",

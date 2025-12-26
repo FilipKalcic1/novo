@@ -215,10 +215,12 @@ class ParameterManager:
         injected = {}
 
         # FIX v13.3: Skip certain params that have incorrect context_key in Swagger metadata
-        # VehicleId should come from user selection, not context injection
+        # VehicleId should come from user context vehicle.id, not person_id
         skip_injection = set()
         if tool.operation_id == "post_VehicleCalendar":
             skip_injection = {"VehicleId", "EntryType", "AssigneeType"}
+        elif tool.operation_id == "post_AddMileage":
+            skip_injection = {"VehicleId"}  # VehicleId comes from user_context.vehicle.id
 
         # STEP 1: Direct context parameter injection (existing behavior)
         for param_name, param_def in tool.get_context_params().items():
@@ -383,6 +385,15 @@ class ParameterManager:
                     }:
                         processed[param_name] = value
                         logger.debug(f"Passed through booking param: {param_name}")
+                        continue
+
+                    # FIX v13.4: Special handling for AddMileage params
+                    # VehicleId comes from user_context.vehicle.id, not context injection
+                    if tool.operation_id == "post_AddMileage" and param_name in {
+                        "VehicleId", "Value", "Comment", "Time"
+                    }:
+                        processed[param_name] = value
+                        logger.debug(f"Passed through mileage param: {param_name}")
                         continue
 
                     # FIX v13.2: Log at debug level, not warning, because
@@ -608,13 +619,16 @@ class ParameterManager:
         """Check for missing required parameters."""
         missing = []
 
-        # FIX v13.3: Skip booking params for VehicleCalendar
-        # These have incorrect context_key/dependency_source in Swagger metadata
-        # - VehicleId comes from user selection, not context
+        # FIX v13.3: Skip params with incorrect context_key/dependency_source
+        # These have incorrect metadata in Swagger definitions
+        # - VehicleId comes from user selection or user_context.vehicle.id, not person_id
         # - EntryType/AssigneeType will be injected by executor
         skip_params = set()
         if tool.operation_id == "post_VehicleCalendar":
             skip_params = {"VehicleId", "EntryType", "AssigneeType"}
+        elif tool.operation_id == "post_AddMileage":
+            # VehicleId comes from llm_params (passed from flow/executor), not context
+            skip_params = {"VehicleId"}
 
         for param_name in tool.required_params:
             if param_name in skip_params:
