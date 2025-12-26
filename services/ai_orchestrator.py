@@ -155,11 +155,26 @@ class AIOrchestrator:
 
             # ACTION-FIRST PROTOCOL: Force specific tool if similarity >= ACTION_THRESHOLD
             if forced_tool:
-                call_args["tool_choice"] = {
-                    "type": "function",
-                    "function": {"name": forced_tool}
+                # CRITICAL FIX: Verify forced_tool is actually in trimmed_tools
+                # Token budgeting may have removed it!
+                trimmed_tool_names = {
+                    t.get("function", {}).get("name")
+                    for t in trimmed_tools
                 }
-                logger.info(f"Forced tool call: {forced_tool} (similarity >= {settings.ACTION_THRESHOLD})")
+
+                if forced_tool in trimmed_tool_names:
+                    call_args["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": forced_tool}
+                    }
+                    logger.info(f"Forced tool call: {forced_tool} (similarity >= {settings.ACTION_THRESHOLD})")
+                else:
+                    # Forced tool was removed by token budgeting - fall back to auto
+                    logger.warning(
+                        f"⚠️ Forced tool '{forced_tool}' not in trimmed tools "
+                        f"(available: {trimmed_tool_names}). Using auto mode."
+                    )
+                    call_args["tool_choice"] = "auto"
             else:
                 call_args["tool_choice"] = "auto"
 
