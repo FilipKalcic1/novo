@@ -101,7 +101,7 @@ class FlowHandler:
         )
         vehicle_id = first_vehicle.get("Id") or first_vehicle.get("VehicleId")
 
-        # Store for confirmation
+        # CRITICAL FIX v15.1: Store ALL items for later display
         await conv_manager.set_displayed_items(items)
         await conv_manager.add_parameters(parameters)
         await conv_manager.select_item(first_vehicle)
@@ -109,22 +109,28 @@ class FlowHandler:
         if hasattr(conv_manager.context, 'tool_outputs'):
             conv_manager.context.tool_outputs["VehicleId"] = vehicle_id
             conv_manager.context.tool_outputs["vehicleId"] = vehicle_id
+            # Store all vehicles for "show me others" requests
+            conv_manager.context.tool_outputs["all_available_vehicles"] = items
 
         conv_manager.context.current_tool = "post_VehicleCalendar"
 
-        from_time = parameters.get("from") or parameters.get("FromTime", "N/A")
-        to_time = parameters.get("to") or parameters.get("ToTime", "N/A")
+        from_time = parameters.get("from") or parameters.get("FromTime")
+        to_time = parameters.get("to") or parameters.get("ToTime")
 
-        message = (
-            f"**Pronasao sam slobodno vozilo:**\n\n"
-            f"**{vehicle_name}** ({plate})\n\n"
-            f"Period: {from_time} -> {to_time}\n\n"
-        )
+        # CRITICAL FIX v15.1: Don't show dates if not provided by user
+        message = f"**Pronasao sam slobodno vozilo:**\n\n**{vehicle_name}** ({plate})\n\n"
+
+        if from_time and to_time:
+            message += f"Period: {from_time} -> {to_time}\n\n"
 
         if len(items) > 1:
-            message += f"_(Ima jos {len(items) - 1} slobodnih vozila)_\n\n"
+            message += f"_(Ima jos {len(items) - 1} slobodnih vozila. Recite 'pokaži ostala' za listu)_\n\n"
 
-        message += "**Zelite li potvrditi rezervaciju?** (Da/Ne)"
+        # CRITICAL FIX v15.1: Only ask for confirmation if we have time params
+        if from_time and to_time:
+            message += "**Zelite li potvrditi rezervaciju?** (Da/Ne)"
+        else:
+            message += "**Za nastavak trebam period rezervacije.** (npr. 'od sutra 9h do 17h')"
 
         await conv_manager.request_confirmation(message)
         await conv_manager.save()
@@ -219,6 +225,35 @@ class FlowHandler:
         conv_manager
     ) -> str:
         """Handle confirmation response."""
+        # CRITICAL FIX v15.1: Check if user wants to see other vehicles
+        text_lower = text.lower()
+        if any(keyword in text_lower for keyword in ["pokaz", "ostala", "druga", "jos vozila", "vise"]):
+            # User wants to see other available vehicles
+            if hasattr(conv_manager.context, 'tool_outputs'):
+                all_vehicles = conv_manager.context.tool_outputs.get("all_available_vehicles", [])
+
+                if len(all_vehicles) > 1:
+                    message = "**Sva dostupna vozila:**\n\n"
+                    for idx, vehicle in enumerate(all_vehicles[:10], 1):  # Show max 10
+                        v_name = (
+                            vehicle.get("FullVehicleName") or
+                            vehicle.get("DisplayName") or
+                            vehicle.get("Name") or
+                            "Vozilo"
+                        )
+                        plate = vehicle.get("LicencePlate") or vehicle.get("Plate") or "N/A"
+                        message += f"{idx}. **{v_name}** ({plate})\n"
+
+                    message += "\n_Recite broj vozila koje želite (npr. '2') ili 'odustani' za povratak._"
+
+                    # Switch to SELECTING_ITEM state
+                    await conv_manager.request_selection(message)
+                    await conv_manager.save()
+
+                    return message
+
+            return "Trenutno nema drugih dostupnih vozila."
+
         confirmation = conv_manager.parse_confirmation(text)
 
         if confirmation is None:
@@ -258,8 +293,8 @@ class FlowHandler:
                 "VehicleId": vehicle_id,
                 "FromTime": from_time,
                 "ToTime": to_time,
-                "AssigneeType": AssigneeType.PERSON,
-                "EntryType": EntryType.BOOKING,
+                "AssigneeType": int(AssigneeType.PERSON),  # Explicit int conversion
+                "EntryType": int(EntryType.BOOKING),  # Explicit int conversion
                 "Description": params.get("Description") or params.get("description")
             }
         else:
@@ -279,9 +314,16 @@ class FlowHandler:
             await conv_manager.reset()
             return f"Tehnicki problem - alat '{tool_name}' nije pronaden."
 
+        # FIX: Inject EntryType and AssigneeType into user_context for booking
+        # These are required context params that need default values
+        booking_context = user_context.copy()
+        if tool_name == "post_VehicleCalendar":
+            booking_context["entrytype"] = int(EntryType.BOOKING)  # 0
+            booking_context["assigneetype"] = int(AssigneeType.PERSON)  # 1
+
         from services.tool_contracts import ToolExecutionContext
         execution_context = ToolExecutionContext(
-            user_context=user_context,
+            user_context=booking_context,
             tool_outputs=(
                 conv_manager.context.tool_outputs
                 if hasattr(conv_manager.context, 'tool_outputs')
@@ -316,6 +358,30 @@ class FlowHandler:
                     f"Sretno na putu!"
                 )
 
+            # Case creation success message
+            if tool_name == "post_Case":
+                case_id = ""
+                if isinstance(result.data, dict):
+                    case_id = result.data.get("Id", "") or result.data.get("CaseId", "")
+
+                subject = params.get("Subject", "Slučaj")
+                return (
+                    f"**Prijava uspješno kreirana!**\n\n"
+                    f"Naslov: {subject}\n"
+                    f"{'Broj slučaja: ' + str(case_id) if case_id else ''}\n\n"
+                    f"Naš tim će pregledati vašu prijavu i javiti vam se.\n"
+                    f"Kako vam još mogu pomoći?"
+                )
+
+            # Mileage update success message
+            if tool_name == "post_Mileage":
+                value = params.get("Value", "")
+                return (
+                    f"**Kilometraža uspješno unesena!**\n\n"
+                    f"Nova kilometraža: {value} km\n\n"
+                    f"Kako vam još mogu pomoći?"
+                )
+
             created_id = ""
             if isinstance(result.data, dict):
                 created_id = result.data.get("created_id", "") or result.data.get("Id", "")
@@ -341,13 +407,15 @@ class FlowHandler:
         "VehicleId": "ID vozila (UUID format)",
         "vehicleId": "ID vozila",
         # Time parameters
-        "from": "Početno vrijeme (datum i sat, npr. 'sutra u 9:00')",
-        "to": "Završno vrijeme (datum i sat, npr. 'sutra u 17:00')",
-        "FromTime": "Početno vrijeme rezervacije",
-        "ToTime": "Završno vrijeme rezervacije",
-        # Other parameters
-        "Description": "Opis situacije ili napomena",
+        "from": "Početno vrijeme (datum i sat, npr. 'sutra u 9:00', 'prekosutra 10:00')",
+        "to": "Završno vrijeme - do kada (npr. '17:00', 'prekosutra', 'petak')",
+        "FromTime": "Početno vrijeme rezervacije (npr. 'sutra u 9:00')",
+        "ToTime": "Završno vrijeme - DO KADA traje rezervacija (npr. '17:00', 'prekosutra 18:00', '28.12.2025.')",
+        # Case/Support parameters
+        "Description": "Opis problema, kvara ili situacije",
         "description": "Tekstualni opis",
+        "Subject": "Naslov ili tema slučaja (npr. 'Prijava kvara', 'Problem s vozilom')",
+        "subject": "Naslov slučaja",
     }
 
     async def handle_gathering(
@@ -358,21 +426,46 @@ class FlowHandler:
         conv_manager,
         handle_new_request_fn
     ) -> str:
-        """Handle parameter gathering."""
+        """Handle parameter gathering with smart extraction."""
         missing = conv_manager.get_missing_params()
+
+        logger.info(f"GATHERING: missing={missing}, user_input='{text[:50]}'")
+
+        # Build context for better extraction
+        context = None
+        if len(missing) == 1:
+            param = missing[0]
+            context = f"Bot je pitao korisnika za '{param}'. Korisnikov odgovor je vjerojatno vrijednost za taj parametar."
 
         # Dodaj semantički kontekst za svaki parametar
         extracted = await self.ai.extract_parameters(
             text,
-            [{"name": p, "type": "string", "description": self.PARAM_DESCRIPTIONS.get(p, p)} for p in missing]
+            [{"name": p, "type": "string", "description": self.PARAM_DESCRIPTIONS.get(p, p)} for p in missing],
+            context=context
         )
+
+        logger.info(f"GATHERING: extracted={extracted}")
+
+        # FALLBACK: Ako extrakcija nije uspjela i tražimo samo jedan parametar,
+        # koristi cijeli tekst kao vrijednost (smart assumption)
+        if len(missing) == 1 and not extracted.get(missing[0]):
+            param = missing[0]
+            # Za vremenske parametre, pokušaj parsirati tekst
+            if param.lower() in ['totime', 'fromtime', 'to', 'from']:
+                # Korisnik je vjerovatno dao vrijeme/datum
+                # Prihvati ga kao vrijednost
+                if text.strip() and len(text.strip()) < 50:  # Razumna duljina za datum
+                    extracted[param] = text.strip()
+                    logger.info(f"GATHERING FALLBACK: Using raw text '{text.strip()}' as {param}")
 
         await conv_manager.add_parameters(extracted)
 
         if conv_manager.has_all_required_params():
+            logger.info("GATHERING: All params collected, continuing flow")
             return await handle_new_request_fn(sender, text, user_context, conv_manager)
 
         still_missing = conv_manager.get_missing_params()
+        logger.info(f"GATHERING: Still missing {still_missing}")
         return self._build_param_prompt(still_missing)
 
     def _extract_items(self, data: Any) -> List[Dict]:
@@ -398,9 +491,11 @@ class FlowHandler:
             "to": "Do kada? (npr. 'sutra u 17:00')",
             "FromTime": "Od kada vam treba?",
             "ToTime": "Do kada?",
-            # Description
-            "Description": "Možete li opisati situaciju?",
+            # Description & Subject (Case creation)
+            "Description": "Možete li opisati problem ili situaciju?",
             "description": "Opišite situaciju",
+            "Subject": "Koji je naslov prijave? (npr. 'Kvar klime')",
+            "subject": "Naslov slučaja",
             # Vehicle
             "VehicleId": "Koje vozilo želite?",
             "vehicleId": "Koje vozilo?",

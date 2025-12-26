@@ -214,8 +214,17 @@ class ParameterManager:
         """
         injected = {}
 
+        # FIX v13.3: Skip certain params that have incorrect context_key in Swagger metadata
+        # VehicleId should come from user selection, not context injection
+        skip_injection = set()
+        if tool.operation_id == "post_VehicleCalendar":
+            skip_injection = {"VehicleId", "EntryType", "AssigneeType"}
+
         # STEP 1: Direct context parameter injection (existing behavior)
         for param_name, param_def in tool.get_context_params().items():
+            if param_name in skip_injection:
+                continue
+
             context_key = param_def.context_key or param_name.lower()
 
             if context_key in user_context:
@@ -366,6 +375,16 @@ class ParameterManager:
                         break
 
                 if not matched:
+                    # FIX v13.3: Special handling for VehicleCalendar booking params
+                    # These params come from flow_handler, not LLM, so pass them through
+                    if tool.operation_id == "post_VehicleCalendar" and param_name in {
+                        "VehicleId", "AssignedToId", "FromTime", "ToTime",
+                        "EntryType", "AssigneeType", "Description"
+                    }:
+                        processed[param_name] = value
+                        logger.debug(f"Passed through booking param: {param_name}")
+                        continue
+
                     # FIX v13.2: Log at debug level, not warning, because
                     # some params like personId are intentionally added by
                     # tool_executor AFTER this processing step
@@ -589,7 +608,17 @@ class ParameterManager:
         """Check for missing required parameters."""
         missing = []
 
+        # FIX v13.3: Skip booking params for VehicleCalendar
+        # These have incorrect context_key/dependency_source in Swagger metadata
+        # - VehicleId comes from user selection, not context
+        # - EntryType/AssigneeType will be injected by executor
+        skip_params = set()
+        if tool.operation_id == "post_VehicleCalendar":
+            skip_params = {"VehicleId", "EntryType", "AssigneeType"}
+
         for param_name in tool.required_params:
+            if param_name in skip_params:
+                continue
             if param_name not in params or params[param_name] is None:
                 missing.append(param_name)
 

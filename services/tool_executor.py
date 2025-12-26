@@ -154,6 +154,16 @@ class ToolExecutor:
                                     )
                                     break
 
+            # FIX v13.3: Inject EntryType and AssigneeType for VehicleCalendar booking
+            # These params have incorrect context_key in Swagger metadata
+            if tool.operation_id == "post_VehicleCalendar" and body:
+                if "EntryType" not in body:
+                    body["EntryType"] = 0  # BOOKING
+                    logger.debug("Injected EntryType=0 (BOOKING) for VehicleCalendar")
+                if "AssigneeType" not in body:
+                    body["AssigneeType"] = 1  # PERSON
+                    logger.debug("Injected AssigneeType=1 (PERSON) for VehicleCalendar")
+
             # Build full URL using STRICT Master Prompt v3.1 formula
             full_url = self._build_url(tool)
 
