@@ -173,7 +173,7 @@ class QueryRouter:
                     r"kvar",
                 ],
                 "intent": "REPORT_DAMAGE",
-                "tool": "post_Case",
+                "tool": "post_AddCase",
                 "extract_fields": [],
                 "response_template": None,
                 "flow_type": "case_creation",
@@ -357,7 +357,7 @@ class QueryRouter:
                 "reason": "User profile information"
             },
             "support": {
-                "tool": "post_Case",
+                "tool": "post_AddCase",
                 "extract_fields": [],
                 "reason": "Create support case"
             }

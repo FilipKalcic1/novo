@@ -946,7 +946,7 @@ class MessageEngine:
             # Need to gather description
             await conv_manager.start_flow(
                 flow_name="case_creation",
-                tool="post_Case",
+                tool="post_AddCase",
                 required_params=["Description"]
             )
 
@@ -960,12 +960,13 @@ class MessageEngine:
             return "Možete li opisati problem ili kvar detaljnije?"
 
         # Have all data - request confirmation
+        # API expects: User, Subject, Message
+        person_id = user_context.get("person_id", "")
         params = {
+            "User": person_id,  # Required by API
             "Subject": subject,
-            "Description": description
+            "Message": description  # API uses "Message", not "Description"
         }
-        if vehicle_id:
-            params["VehicleId"] = vehicle_id
 
         await conv_manager.add_parameters(params)
 
@@ -980,7 +981,7 @@ class MessageEngine:
         )
 
         await conv_manager.request_confirmation(message)
-        conv_manager.context.current_tool = "post_Case"
+        conv_manager.context.current_tool = "post_AddCase"
         await conv_manager.save()
 
         return message

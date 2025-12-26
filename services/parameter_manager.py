@@ -396,6 +396,15 @@ class ParameterManager:
                         logger.debug(f"Passed through mileage param: {param_name}")
                         continue
 
+                    # FIX v13.5: Special handling for AddCase params
+                    # These come from flow_handler, not standard param resolution
+                    if tool.operation_id == "post_AddCase" and param_name in {
+                        "User", "Subject", "Message"
+                    }:
+                        processed[param_name] = value
+                        logger.debug(f"Passed through case param: {param_name}")
+                        continue
+
                     # FIX v13.2: Log at debug level, not warning, because
                     # some params like personId are intentionally added by
                     # tool_executor AFTER this processing step
@@ -629,6 +638,9 @@ class ParameterManager:
         elif tool.operation_id == "post_AddMileage":
             # VehicleId comes from llm_params (passed from flow/executor), not context
             skip_params = {"VehicleId"}
+        elif tool.operation_id == "post_AddCase":
+            # All params come from flow, not context injection
+            skip_params = {"User", "Subject", "Message"}
 
         for param_name in tool.required_params:
             if param_name in skip_params:

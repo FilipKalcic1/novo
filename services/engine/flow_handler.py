@@ -359,7 +359,7 @@ class FlowHandler:
                 )
 
             # Case creation success message
-            if tool_name == "post_Case":
+            if tool_name == "post_AddCase":
                 case_id = ""
                 if isinstance(result.data, dict):
                     case_id = result.data.get("Id", "") or result.data.get("CaseId", "")
