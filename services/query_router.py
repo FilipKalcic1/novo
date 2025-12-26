@@ -51,15 +51,38 @@ class QueryRouter:
     def _build_rules(self) -> List[Dict[str, Any]]:
         """Build deterministic routing rules."""
         return [
+            # === MILEAGE INPUT (must be BEFORE GET_MILEAGE to catch "unesi" first) ===
+            {
+                "patterns": [
+                    r"unesi.*kilometra",
+                    r"upiši.*kilometra",
+                    r"unos.*(km|kilometra)",
+                    r"prijavi.*(km|kilometra)",
+                    r"unesite.*(km|kilometra)",
+                    r"nova.*kilometra",
+                    r"ažuriraj.*(km|kilometra)",
+                    r"ho[cć]u.*unijeti.*(km|kilometra)",
+                    r"želim.*unijeti.*(km|kilometra)",
+                    r"trebam.*unijeti.*(km|kilometra)",
+                    r"unijeti.*kilometra",
+                ],
+                "intent": "INPUT_MILEAGE",
+                "tool": "post_AddMileage",
+                "extract_fields": [],
+                "response_template": None,
+                "flow_type": "mileage_input",
+            },
             # === MILEAGE QUERIES ===
             {
                 "patterns": [
-                    r"kilometra[zž]",
-                    r"koliko.*km",
-                    r"kolika.*km",
-                    r"stanje.*km",
+                    r"koliko.*(km|kilometra)",
+                    r"kolika.*(km|kilometra)",
+                    r"stanje.*(km|kilometra)",
                     r"\bkm\b.*vozil",
                     r"mileage",
+                    r"koja.*kilometra[zž]",
+                    r"trenutna.*kilometra",
+                    r"kilometra[zž]a.*vozil",
                 ],
                 "intent": "GET_MILEAGE",
                 "tool": "get_MasterData",
@@ -143,23 +166,6 @@ class QueryRouter:
                 "extract_fields": [],
                 "response_template": None,
                 "flow_type": "booking",
-            },
-            # === MILEAGE INPUT ===
-            {
-                "patterns": [
-                    r"unesi.*kilometra",
-                    r"upiši.*kilometra",
-                    r"unos.*km",
-                    r"prijavi.*km",
-                    r"unesite.*km",
-                    r"nova.*kilometra",
-                    r"ažuriraj.*km",
-                ],
-                "intent": "INPUT_MILEAGE",
-                "tool": "post_AddMileage",
-                "extract_fields": [],
-                "response_template": None,
-                "flow_type": "mileage_input",
             },
             # === REPORT DAMAGE ===
             {

@@ -44,6 +44,33 @@ class FlowHandler:
 
         Returns vehicles found and sets up confirmation flow.
         """
+        # Check if time parameters are provided
+        has_from = parameters.get("from") or parameters.get("FromTime")
+        has_to = parameters.get("to") or parameters.get("ToTime")
+
+        if not has_from or not has_to:
+            # Need to gather time parameters first
+            await conv_manager.start_flow(
+                flow_name="booking",
+                tool="get_AvailableVehicles",
+                required_params=["from", "to"]
+            )
+
+            # Store any partial params we have
+            if has_from or has_to:
+                await conv_manager.add_parameters(parameters)
+
+            await conv_manager.save()
+
+            return {
+                "needs_input": True,
+                "prompt": (
+                    "Za rezervaciju vozila trebam znati period.\n\n"
+                    "Molim navedite **od kada do kada** trebate vozilo?\n"
+                    "_Npr. 'sutra od 8 do 17' ili 'od ponedjeljka do srijede'_"
+                )
+            }
+
         tool = self.registry.get_tool(tool_name)
         if not tool:
             return {

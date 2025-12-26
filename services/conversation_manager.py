@@ -117,14 +117,21 @@ class ConversationManager:
     async def load(self) -> None:
         """Load state from Redis."""
         if not self.redis or self._loaded:
+            logger.debug(f"Skipping load: redis={bool(self.redis)}, loaded={self._loaded}")
             return
-        
+
         try:
             data = await self.redis.get(self._redis_key)
             if data:
                 state_dict = json.loads(data)
                 self.context = ConversationContext(**state_dict)
-                logger.debug(f"Loaded state for {self.user_id[-4:]}: {self.context.state}")
+                # INFO level to ensure we see state loading
+                logger.info(
+                    f"CONV LOADED: user={self.user_id[-4:]}, state={self.context.state}, "
+                    f"flow={self.context.current_flow}, missing={self.context.missing_params}"
+                )
+            else:
+                logger.info(f"CONV LOADED: user={self.user_id[-4:]}, NO STATE IN REDIS (fresh)")
             self._loaded = True
         except Exception as e:
             logger.warning(f"Failed to load state: {e}")
@@ -247,7 +254,14 @@ class ConversationManager:
         self.context.state = ConversationState.CONFIRMING.value
         self.context.last_updated = datetime.utcnow().isoformat()
         await self.save()
-    
+
+    async def request_selection(self, message: str):
+        """Request item selection from displayed list."""
+        self.context.confirmation_message = message
+        self.context.state = ConversationState.SELECTING_ITEM.value
+        self.context.last_updated = datetime.utcnow().isoformat()
+        await self.save()
+
     async def confirm(self) -> bool:
         """User confirmed."""
         if self.context.state != ConversationState.CONFIRMING.value:
