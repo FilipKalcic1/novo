@@ -151,16 +151,57 @@ class QueryRouter:
                 "response_template": "🏢 **Lizing kuća:** {value}",
                 "flow_type": "simple",
             },
+            # === SERVICE / MAINTENANCE ===
+            {
+                "patterns": [
+                    r"servis",                          # servis
+                    r"koliko.*do.*servis",              # koliko do servisa
+                    r"kad.*servis",                     # kad je servis, kad trebam na servis
+                    r"kada.*servis",                    # kada je servis
+                    r"sljede[cć]i.*servis",             # sljedeći servis
+                    r"trebam.*servis",                  # trebam na servis
+                    r"preostalo.*servis",               # preostalo do servisa
+                    r"do.*servisa",                     # do servisa
+                    r"odr[zž]avanj",                    # održavanje/odrzavanje
+                    r"zadnji.*servis",                  # zadnji servis
+                    r"pro[sš]li.*servis",               # prošli/prosli servis
+                    r"povijest.*servis",                # povijest servisa
+                ],
+                "intent": "GET_SERVICE_MILEAGE",
+                "tool": "get_MasterData",
+                "extract_fields": ["ServiceMileage", "NextServiceMileage", "LastServiceDate"],
+                "response_template": "🔧 **Do servisa:** {value} km",
+                "flow_type": "simple",
+            },
+            # === MY BOOKINGS (must be BEFORE booking to catch "moje rezervacije" first) ===
+            {
+                "patterns": [
+                    r"moje.*rezervacij",
+                    r"moje.*booking",
+                    r"kada.*imam.*rezerv",
+                    r"poka[zž]i.*rezervacij",  # pokaži/pokazi rezervacije
+                    r"prika[zž]i.*rezervacij", # prikaži/prikazi rezervacije
+                    r"sve.*rezervacij",        # sve rezervacije
+                    r"ima[lm].*rezerv",        # imam/imali rezervaciju
+                ],
+                "intent": "GET_MY_BOOKINGS",
+                "tool": "get_VehicleCalendar",
+                "extract_fields": ["FromTime", "ToTime", "VehicleName"],
+                "response_template": None,
+                "flow_type": "list",
+            },
             # === BOOKING / RESERVATION ===
             {
                 "patterns": [
                     r"rezervir",
-                    r"rezervacij",
+                    r"rezervacij",  # Note: "moje rezervacije" caught by MY_BOOKINGS above
                     r"trebam.*vozilo",
                     r"treba.*mi.*vozilo",
-                    r"book",
+                    r"book(?!ing)",           # book but not booking (for "moje booking")
                     r"zauzmi",
                     r"zakup",
+                    r"ho[cć]u.*rezerv",       # hoću rezervirati
+                    r"[zž]elim.*rezerv",      # želim rezervirati
                 ],
                 "intent": "BOOK_VEHICLE",
                 "tool": "get_AvailableVehicles",
@@ -173,31 +214,26 @@ class QueryRouter:
                 "patterns": [
                     r"prijavi.*kvar",
                     r"prijava.*kvar",
-                    r"šteta",
-                    r"oštećenj",
-                    r"nešto.*ne.*radi",
+                    r"prijavi.*[sš]tet",    # prijavi štetu, prijavi stetu (with/without diacritics)
+                    r"prijava.*[sš]tet",    # prijava štete, prijava stete
+                    r"[sš]tet[aeu]",        # šteta/steta, štetu/stetu, štete/stete
+                    r"o[sš]te[cć]enj",      # oštećenje, ostecenje
+                    r"ne[sš]to.*ne.*radi",
                     r"problem.*vozil",
                     r"kvar",
+                    r"imam.*kvar",          # imam kvar
+                    r"imam.*[sš]tet",       # imam štetu/stetu
+                    r"ima.*[sš]tet",        # ima štete/stete
+                    r"dogodila.*nesre[cć]", # dogodila se nesreća/nesreca
+                    r"nesre[cć]",           # nesreća/nesreca
+                    r"sudar",               # sudar
+                    r"udar",                # udar
                 ],
                 "intent": "REPORT_DAMAGE",
                 "tool": "post_AddCase",
                 "extract_fields": [],
                 "response_template": None,
                 "flow_type": "case_creation",
-            },
-            # === MY BOOKINGS ===
-            {
-                "patterns": [
-                    r"moje.*rezervacij",
-                    r"moje.*booking",
-                    r"kada.*imam.*rezerv",
-                    r"prika[zž]i.*rezervacij",
-                ],
-                "intent": "GET_MY_BOOKINGS",
-                "tool": "get_VehicleCalendar",
-                "extract_fields": ["FromTime", "ToTime", "VehicleName"],
-                "response_template": None,
-                "flow_type": "list",
             },
             # === GREETINGS ===
             {
@@ -285,92 +321,14 @@ class QueryRouter:
                         reason=f"Matched pattern: {pattern}"
                     )
 
-        # No exact match - try domain-based fallback
-        domain = self._detect_domain(query_lower)
-
-        if domain:
-            fallback = self._get_domain_fallback(domain)
-            if fallback:
-                logger.info(
-                    f"ROUTER: No exact match, using domain fallback: "
-                    f"{domain} → {fallback['tool']}"
-                )
-                return RouteResult(
-                    matched=True,
-                    tool_name=fallback["tool"],
-                    extract_fields=fallback.get("extract_fields", []),
-                    response_template=None,  # Use LLM extraction
-                    flow_type="domain_fallback",
-                    confidence=0.7,  # Lower confidence for domain fallback
-                    reason=f"Domain fallback: {domain}"
-                )
-
-        # No domain detected - ask for clarification
-        logger.info(f"ROUTER: No match for '{query[:30]}...' - needs clarification")
+        # No exact match - let semantic search handle it
+        logger.info(f"ROUTER: No match for '{query[:30]}...' - using semantic search")
         return RouteResult(
             matched=False,
             confidence=0.0,
             reason="No pattern matched, no domain detected"
         )
 
-    def _detect_domain(self, query: str) -> Optional[str]:
-        """Detect which domain the query is about."""
-        domain_keywords = {
-            "vehicle": [
-                "vozil", "auto", "car", "golf", "audi", "bmw", "mercedes",
-                "tablica", "registraci", "lizing", "leasing", "km", "kilometr",
-                "servis", "guma", "ulje", "motor"
-            ],
-            "booking": [
-                "rezerv", "book", "zauzmi", "slobodn", "dostupn", "termin",
-                "kada", "sutra", "danas", "tjedan"
-            ],
-            "person": [
-                "moj", "meni", "ja", "profil", "račun", "account",
-                "email", "telefon", "adresa"
-            ],
-            "support": [
-                "problem", "pomoć", "help", "greška", "error", "ne radi",
-                "kvar", "šteta", "oštećen"
-            ]
-        }
-
-        for domain, keywords in domain_keywords.items():
-            for keyword in keywords:
-                if keyword in query:
-                    return domain
-
-        return None
-
-    def _get_domain_fallback(self, domain: str) -> Optional[Dict[str, Any]]:
-        """Get fallback tool for a domain."""
-        fallbacks = {
-            "vehicle": {
-                "tool": "get_MasterData",
-                "extract_fields": [
-                    "FullVehicleName", "LicencePlate", "LastMileage",
-                    "RegistrationExpirationDate", "LeasingProvider"
-                ],
-                "reason": "General vehicle data - covers most vehicle queries"
-            },
-            "booking": {
-                "tool": "get_AvailableVehicles",
-                "extract_fields": ["FullVehicleName", "LicencePlate"],
-                "reason": "Show available vehicles for booking"
-            },
-            "person": {
-                "tool": "get_PersonDetails",
-                "extract_fields": ["DisplayName", "Email", "Phone"],
-                "reason": "User profile information"
-            },
-            "support": {
-                "tool": "post_AddCase",
-                "extract_fields": [],
-                "reason": "Create support case"
-            }
-        }
-
-        return fallbacks.get(domain)
 
     def format_response(
         self,

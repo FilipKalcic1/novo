@@ -75,7 +75,7 @@ class SearchEngine:
         "category_boost": 0.12,        # Boost for tools in matching category
         "keyword_match_boost": 0.08,   # Boost for keyword matches
         "documentation_boost": 0.10,   # Boost when query matches tool documentation
-        "training_match_boost": 0.15,  # Boost when similar to training examples
+        "training_match_boost": 0.35,  # Boost when similar to training examples (increased from 0.15)
     }
 
     def __init__(self):
@@ -116,7 +116,9 @@ class SearchEngine:
             logger.info(f"📄 Loaded documentation for {len(self._tool_documentation)} tools")
 
         if self._training_queries:
-            training_count = len(self._training_queries.get("training_data", []))
+            # Support both "examples" (new) and "training_data" (legacy)
+            training_count = len(self._training_queries.get("examples",
+                                  self._training_queries.get("training_data", [])))
             logger.info(f"🎯 Loaded {training_count} training examples")
 
         logger.debug("SearchEngine initialized (v2.0 with categories)")
@@ -543,7 +545,9 @@ class SearchEngine:
         # Check for training example matches
         matched_tools_from_training: Set[str] = set()
         if self._training_queries:
-            training_data = self._training_queries.get("training_data", [])
+            # Support both "examples" (new) and "training_data" (legacy)
+            training_data = self._training_queries.get("examples",
+                             self._training_queries.get("training_data", []))
             for example in training_data:
                 example_query = example.get("query", "").lower()
                 # Simple word overlap matching
@@ -610,3 +614,305 @@ class SearchEngine:
             return []
         cat_data = self._tool_categories["categories"].get(category_name, {})
         return cat_data.get("tools", [])
+
+    def _find_direct_training_matches(self, query: str) -> Set[str]:
+        """
+        Find tools that directly match training examples.
+        Uses word overlap to find training matches and returns the primary tools.
+
+        Returns:
+            Set of tool IDs that match training examples
+        """
+        if not self._training_queries:
+            return set()
+
+        query_lower = query.lower().strip()
+        query_words = set(query_lower.split())
+        matched_tools: Set[str] = set()
+
+        training_data = self._training_queries.get("examples",
+                         self._training_queries.get("training_data", []))
+
+        best_overlap = 0
+        best_tool = None
+
+        for example in training_data:
+            example_query = example.get("query", "").lower()
+            example_words = set(example_query.split())
+            overlap = len(query_words & example_words)
+
+            # Require significant overlap
+            if overlap >= 3 or (overlap >= 2 and len(query_words) <= 4):
+                tool = example.get("primary_tool", "")
+                if tool:
+                    matched_tools.add(tool)
+                    # Track best match
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_tool = tool
+
+        # If we have a clear best match (3+ words), prioritize it
+        if best_tool and best_overlap >= 3:
+            return {best_tool}
+
+        return matched_tools
+
+    # =========================================================================
+    # NEW: FILTERING METHODS FOR OPTIMIZED SEARCH
+    # =========================================================================
+
+    def detect_intent(self, query: str) -> str:
+        """
+        Detect query intent: READ, WRITE, or UNKNOWN.
+
+        Returns:
+            'READ' - user wants information (GET)
+            'WRITE' - user wants to create/update/delete (POST/PUT/DELETE)
+            'UNKNOWN' - unclear intent
+        """
+        query_lower = query.lower().strip()
+
+        # Check for mutation intent first (more specific)
+        if any(re.search(pattern, query_lower) for pattern in MUTATION_INTENT_PATTERNS):
+            return "WRITE"
+
+        # Check for read intent
+        if any(re.search(pattern, query_lower) for pattern in READ_INTENT_PATTERNS):
+            return "READ"
+
+        return "UNKNOWN"
+
+    def detect_categories(self, query: str) -> Set[str]:
+        """
+        Detect which categories the query is about.
+
+        Returns:
+            Set of category names that match the query
+        """
+        if not self._category_keywords:
+            return set()
+
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+        matching_categories: Set[str] = set()
+
+        for cat_name, keywords in self._category_keywords.items():
+            # Check for word overlap
+            if query_words & keywords:
+                matching_categories.add(cat_name)
+                continue
+
+            # Check for substring matches (for longer keywords)
+            for keyword in keywords:
+                if len(keyword) >= 4 and keyword in query_lower:
+                    matching_categories.add(cat_name)
+                    break
+
+        return matching_categories
+
+    def filter_by_method(
+        self,
+        tool_ids: Set[str],
+        tools: Dict[str, UnifiedToolDefinition],
+        intent: str
+    ) -> Set[str]:
+        """
+        Filter tools by HTTP method based on intent.
+
+        Args:
+            tool_ids: Set of tool IDs to filter
+            tools: Dict of all tools
+            intent: 'READ', 'WRITE', or 'UNKNOWN'
+
+        Returns:
+            Filtered set of tool IDs
+        """
+        if intent == "UNKNOWN":
+            return tool_ids  # No filtering
+
+        filtered = set()
+
+        for tool_id in tool_ids:
+            tool = tools.get(tool_id)
+            if not tool:
+                continue
+
+            if intent == "READ":
+                # For READ intent, prefer GET methods
+                # But also include POST methods that are actually searches
+                if tool.method == "GET":
+                    filtered.add(tool_id)
+                elif tool.method == "POST":
+                    # Some POST methods are actually search/query operations
+                    op_lower = tool_id.lower()
+                    if any(x in op_lower for x in ["search", "query", "find", "filter", "list"]):
+                        filtered.add(tool_id)
+
+            elif intent == "WRITE":
+                # For WRITE intent, prefer POST/PUT/PATCH/DELETE
+                if tool.method in ("POST", "PUT", "PATCH", "DELETE"):
+                    filtered.add(tool_id)
+
+        logger.info(f"🔍 Method filter ({intent}): {len(tool_ids)} → {len(filtered)} tools")
+        return filtered if filtered else tool_ids  # Fallback to all if nothing matches
+
+    def filter_by_categories(
+        self,
+        tool_ids: Set[str],
+        categories: Set[str]
+    ) -> Set[str]:
+        """
+        Filter tools to only those in matching categories.
+
+        Args:
+            tool_ids: Set of tool IDs to filter
+            categories: Set of category names to match
+
+        Returns:
+            Filtered set of tool IDs
+        """
+        if not categories or not self._tool_to_category:
+            return tool_ids  # No filtering if no categories detected
+
+        filtered = set()
+
+        for tool_id in tool_ids:
+            tool_category = self._tool_to_category.get(tool_id)
+            if tool_category and tool_category in categories:
+                filtered.add(tool_id)
+
+        logger.info(f"📂 Category filter ({categories}): {len(tool_ids)} → {len(filtered)} tools")
+        return filtered if filtered else tool_ids  # Fallback to all if nothing matches
+
+    async def find_relevant_tools_filtered(
+        self,
+        query: str,
+        tools: Dict[str, UnifiedToolDefinition],
+        embeddings: Dict[str, List[float]],
+        dependency_graph: Dict[str, DependencyGraph],
+        retrieval_tools: Set[str],
+        mutation_tools: Set[str],
+        top_k: int = 5,
+        threshold: float = 0.55
+    ) -> List[Dict[str, Any]]:
+        """
+        Find relevant tools using FILTER-THEN-SEARCH approach.
+
+        This method:
+        1. Detects intent (READ vs WRITE)
+        2. Filters by HTTP method
+        3. Detects categories
+        4. Filters by categories
+        5. Runs semantic search on filtered set
+        6. Applies boosts and returns results
+
+        This dramatically reduces search space for better accuracy.
+        """
+        # Step 1: Detect intent
+        intent = self.detect_intent(query)
+        logger.info(f"🎯 Detected intent: {intent}")
+
+        # Step 2: Start with all tools
+        search_pool = set(tools.keys())
+        original_size = len(search_pool)
+
+        # Step 3: Filter by method based on intent
+        if intent != "UNKNOWN":
+            search_pool = self.filter_by_method(search_pool, tools, intent)
+
+        # Step 4: Detect categories
+        categories = self.detect_categories(query)
+        if categories:
+            logger.info(f"📂 Detected categories: {categories}")
+
+        # Step 5: Filter by categories (only if we have matches)
+        if categories:
+            search_pool = self.filter_by_categories(search_pool, categories)
+
+        logger.info(f"🔎 Search space: {original_size} → {len(search_pool)} tools")
+
+        # Step 6: Run semantic search on filtered set
+        query_embedding = await self._get_query_embedding(query)
+
+        if not query_embedding:
+            # Fallback to keyword search
+            fallback = self._fallback_keyword_search(query, tools, top_k)
+            return [
+                {"name": name, "score": 0.0, "schema": tools[name].to_openai_function()}
+                for name in fallback if name in search_pool
+            ]
+
+        # Calculate similarity scores on filtered pool
+        lenient_threshold = max(0.40, threshold - 0.20)
+        scored = []
+
+        for op_id in search_pool:
+            if op_id not in embeddings:
+                continue
+
+            similarity = cosine_similarity(query_embedding, embeddings[op_id])
+
+            if similarity >= lenient_threshold:
+                scored.append((similarity, op_id))
+
+        # Apply scoring adjustments (boosts, not filters)
+        scored = self._apply_method_disambiguation(query, scored, tools)
+        scored = self._apply_user_specific_boosting(query, scored, tools)
+        scored = self._apply_category_boosting(query, scored, tools)
+        scored = self._apply_documentation_boosting(query, scored)
+        scored = self._apply_evaluation_adjustment(scored)
+
+        # CRITICAL: Find DIRECT training matches and boost them to TOP
+        training_matched = self._find_direct_training_matches(query)
+        if training_matched:
+            logger.info(f"🎯 Direct training matches: {training_matched}")
+            # Ensure training-matched tools WIN - use score 2.0 to beat any other tool
+            scored_tools = {op_id for _, op_id in scored}
+            for tool_id in training_matched:
+                if tool_id in tools:
+                    if tool_id in scored_tools:
+                        # Set to highest score to ensure it wins
+                        scored = [(2.0, t) if t == tool_id else (s, t) for s, t in scored]
+                    else:
+                        # Add with highest score if not present
+                        scored.append((2.0, tool_id))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Expansion if needed
+        if len(scored) < top_k and len(scored) > 0:
+            keyword_matches = self._description_keyword_search(query, search_pool, tools)
+            for op_id, desc_score in keyword_matches:
+                if op_id not in [s[1] for s in scored]:
+                    scored.append((desc_score * 0.7, op_id))
+            scored.sort(key=lambda x: x[0], reverse=True)
+
+        if not scored:
+            fallback = self._fallback_keyword_search(query, tools, top_k)
+            return [
+                {"name": name, "score": 0.0, "schema": tools[name].to_openai_function()}
+                for name in fallback
+            ]
+
+        # Apply dependency boosting
+        base_tools = [op_id for _, op_id in scored[:top_k]]
+        boosted_tools = self._apply_dependency_boosting(base_tools, dependency_graph)
+        final_tools = boosted_tools[:self.MAX_TOOLS_PER_RESPONSE]
+
+        # Build result
+        result = []
+        scored_dict = {op_id: score for score, op_id in scored}
+
+        for tool_id in final_tools:
+            if tool_id not in tools:
+                continue
+            schema = tools[tool_id].to_openai_function()
+            score = scored_dict.get(tool_id, 0.0)
+            result.append({
+                "name": tool_id,
+                "score": score,
+                "schema": schema
+            })
+
+        logger.info(f"📦 Returning {len(result)} tools (filtered search)")
+        return result

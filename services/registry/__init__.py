@@ -54,7 +54,7 @@ class ToolRegistry:
         self.is_ready = False
         self._load_lock = asyncio.Lock()
 
-        logger.info("ToolRegistry initialized (v2.1 - no translation)")
+        logger.info("ToolRegistry initialized (v3.0 - filter-then-search)")
 
     # ═══════════════════════════════════════════════
     # BACKWARD COMPATIBILITY PROPERTIES
@@ -222,10 +222,19 @@ class ToolRegistry:
         top_k: int = 5,
         threshold: float = 0.55,
         prefer_retrieval: bool = False,
-        prefer_mutation: bool = False
+        prefer_mutation: bool = False,
+        use_filtered_search: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Find relevant tools WITH SIMILARITY SCORES.
+
+        Args:
+            query: User query
+            top_k: Number of tools to return
+            threshold: Minimum similarity threshold
+            prefer_retrieval: Only search GET methods
+            prefer_mutation: Only search POST/PUT/DELETE methods
+            use_filtered_search: Use FILTER-THEN-SEARCH approach (default True)
 
         Returns list of dicts with name, score, and schema.
         """
@@ -233,7 +242,20 @@ class ToolRegistry:
             logger.warning("Registry not ready")
             return []
 
-        # v2.1: Direct semantic search - LLM understands Croatian
+        # v3.0: FILTER-THEN-SEARCH - reduces search space for better accuracy
+        if use_filtered_search:
+            return await self._search.find_relevant_tools_filtered(
+                query=query,
+                tools=self._store.tools,
+                embeddings=self._store.embeddings,
+                dependency_graph=self._store.dependency_graph,
+                retrieval_tools=self._store.retrieval_tools,
+                mutation_tools=self._store.mutation_tools,
+                top_k=top_k,
+                threshold=threshold
+            )
+
+        # Fallback: Original search method
         return await self._search.find_relevant_tools_with_scores(
             query=query,
             tools=self._store.tools,

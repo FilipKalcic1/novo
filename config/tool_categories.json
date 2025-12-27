@@ -2108,16 +2108,29 @@
       "keywords_hr": [
         "vozilo",
         "kalendar",
-        "upravljanje"
+        "upravljanje",
+        "slobodna",
+        "slobodno",
+        "slobodni",
+        "dostupna",
+        "dostupno",
+        "dostupni",
+        "rezervacija"
       ],
       "keywords_en": [
         "vehicle",
         "calendar",
-        "management"
+        "management",
+        "available",
+        "free",
+        "booking",
+        "reservation"
       ],
       "typical_intents": [
         "Retrieve vehicle calendar data",
-        "Delete vehicle calendar entries"
+        "Delete vehicle calendar entries",
+        "Get available vehicles",
+        "Check vehicle availability"
       ],
       "tools": [
         "delete_LatestVehicleCalendar_id",

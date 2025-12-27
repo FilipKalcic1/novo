@@ -23794,6 +23794,2125 @@
       ],
       "response_template": "🚗 Saznaj više o vozilima: {ColumnName}",
       "category": "metadata_retrieval"
+    },
+    {
+      "query": "ima li slobodnih vozila za sutra",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [
+        "get_VehicleCalendar"
+      ],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koji auti su dostupni od ponedjeljka do srijede",
+      "intent": "CHECK_AVAILABILITY_RANGE",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "udario sam u stup na parkiralistu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [
+        "post_Cases"
+      ],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "netko mi je ogrebao auto dok je bio parkiran",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam problema s motorom, cuje se cudna buka",
+      "intent": "REPORT_MALFUNCTION",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "koliko jos mogu voziti do servisa",
+      "intent": "GET_SERVICE_STATUS",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "ServiceMileage",
+        "NextServiceMileage",
+        "LastMileage"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "kad je zadnji put auto bio na servisu",
+      "intent": "GET_LAST_SERVICE",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "LastServiceDate",
+        "LastServiceMileage"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "trenutna kilometraza",
+      "intent": "GET_MILEAGE",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [
+        "get_Vehicles_id"
+      ],
+      "extract_fields": [
+        "LastMileage",
+        "MileageDate"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "moram upisati kilometre 45000",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "trebam auto za poslovni put u Zagreb sljedeci tjedan",
+      "intent": "BOOK_VEHICLE",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [
+        "post_VehicleCalendar"
+      ],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "moje rezervacije",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "otkazi moju rezervaciju za petak",
+      "intent": "CANCEL_BOOKING",
+      "primary_tool": "delete_VehicleCalendar_id",
+      "alternative_tools": [
+        "delete_LatestVehicleCalendar_id"
+      ],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "registracija istice za koliko",
+      "intent": "GET_REGISTRATION_EXPIRY",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "RegistrationExpirationDate"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "koji je broj tablice od passata",
+      "intent": "GET_LICENSE_PLATE",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [
+        "get_Vehicles"
+      ],
+      "extract_fields": [
+        "LicencePlate",
+        "FullVehicleName"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "check availability za sutra",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "di je moj auto",
+      "intent": "GET_MY_VEHICLE",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Location"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "mos mi rec kad imam rezervaciju",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "reci mi kad mi istice registracija",
+      "intent": "GET_REGISTRATION_EXPIRY",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "RegistrationExpirationDate"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "slobodna vozila za vikend",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "imam stetu na vozilu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "moje rezervacije",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kad imam rezervaciju",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "pokazi moje bookinge",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "prikazi sve moje rezervacije",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "koje rezervacije imam",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kada sam rezervirao vozilo",
+      "intent": "GET_MY_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kalendar vozila",
+      "intent": "GET_VEHICLE_CALENDAR",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "rezervacije za vozilo",
+      "intent": "GET_VEHICLE_CALENDAR",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "prijavi stetu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "prijavi kvar",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "prijavi ostecenje",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "udario sam u stup",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ogrebao sam auto",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "problem s motorom",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "auto ne radi",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam problem s autom",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "dodaj novi slucaj stete",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "otvori slucaj za kvar",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "upisi kilometre",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [
+        "post_AddMileage"
+      ],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "upisi kilometre 45000",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [
+        "post_AddMileage"
+      ],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "unesi kilometrazu",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [
+        "post_AddMileage"
+      ],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "dodaj kilometre",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [
+        "post_AddMileage"
+      ],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "azuriraj kilometrazu",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "nova kilometraza",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "zapisati kilometre",
+      "intent": "UPDATE_MILEAGE",
+      "primary_tool": "post_AddMileage",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id"
+      ],
+      "response_template": null,
+      "category": "mileage_reports"
+    },
+    {
+      "query": "provjeri dostupnost vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "dostupna vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima li auta",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koliko do servisa",
+      "intent": "GET_SERVICE_STATUS",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "ServiceMileage",
+        "NextServiceMileage"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "kad je servis",
+      "intent": "GET_SERVICE_STATUS",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "ServiceMileage"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "sljedeci servis",
+      "intent": "GET_SERVICE_STATUS",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "ServiceMileage"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "ima li slobodnih vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koja vozila su slobodna",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koja vozila su dostupna",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "slobodna vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "dostupna vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "slobodni auti",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "dostupni auti",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima li auta",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima li vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "slobodna vozila za sutra",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "slobodna vozila za vikend",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "slobodna vozila za ponedjeljak",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "dostupna vozila za sljedeci tjedan",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koja vozila su slobodna sutra",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koja vozila su dostupna ovaj tjedan",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima li slobodnih vozila za danas",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima li vozila za sutra",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koje vozilo mogu uzeti",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koji auto je slobodan",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "koji auti su na raspolaganju",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "sto je slobodno",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "sto mogu rezervirati",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "provjeri slobodna vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "provjeri dostupnost",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "provjeri dostupnost vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "pogledaj slobodna vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "pokazi slobodna vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "prikazi dostupna vozila",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima nesto slobodno",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima li ista slobodno",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "di ima slobodnih auta",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "ima kakvo vozilo slobodno",
+      "intent": "CHECK_AVAILABILITY",
+      "primary_tool": "get_AvailableVehicles",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FullVehicleName",
+        "LicencePlate",
+        "Id"
+      ],
+      "response_template": null,
+      "category": "vehicle_calendar"
+    },
+    {
+      "query": "moje rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "moji bookings",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "moje booking",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "moja rezervacija",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "rezervacije koje imam",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "koje rezervacije imam",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "imam li rezervaciju",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "imam li booking",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "pokazi moje rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "prikazi moje rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "pokazi rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "prikazi sve rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "daj mi moje rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "daj mi listu rezervacija",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kad imam rezervaciju",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kada imam rezervaciju",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kad je moja rezervacija",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kada je moj booking",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "za kada imam rezervirano",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kad sam rezervirao",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kada sam rezervirao vozilo",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kalendar vozila",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "kalendar rezervacija",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "raspored vozila",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "raspored rezervacija",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "tko ima rezervaciju",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "tko je rezervirao",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "mos mi rec kad imam rezervaciju",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "reci mi moje rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "pokazi mi bookinge",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "pokazi moje bookinge",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "di su moje rezervacije",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "koje bookinge imam",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [
+        "FromTime",
+        "ToTime",
+        "VehicleName"
+      ],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "prijavi stetu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "prijavi kvar",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "prijavi ostecenje",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "prijavi problem",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "prijava stete",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "prijava kvara",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "udario sam",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "udario sam u stup",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "udario sam u zid",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "udario sam u auto",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imao sam sudar",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "dogodila se nesreca",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "dogodio se sudar",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imao sam nesrecu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ogrebao sam auto",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ogrebao sam vozilo",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam ogrebotinu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "netko je ogrebao auto",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ogrebotina na autu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ogreban auto",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam stetu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam stetu na vozilu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam kvar",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam kvar na vozilu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "imam ostecenje",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "osteceno vozilo",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ostecen auto",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "problem s motorom",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "problem s autom",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "problem s vozilom",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "auto ne radi",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "vozilo ne radi",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "motor ne radi",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ne pali",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "ne starta",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "pokvario se",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "pokvarilo se vozilo",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "otvori slucaj",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "dodaj slucaj",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "novi slucaj",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "kreiraj slucaj",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "otvori slucaj za kvar",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "otvori slucaj za stetu",
+      "intent": "REPORT_DAMAGE",
+      "primary_tool": "post_AddCase",
+      "alternative_tools": [],
+      "extract_fields": [
+        "Id",
+        "CaseNumber"
+      ],
+      "response_template": null,
+      "category": "case_management"
+    },
+    {
+      "query": "koja je moja tablica",
+      "intent": "GET_PLATE",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "moja tablica",
+      "intent": "GET_PLATE",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "broj tablica",
+      "intent": "GET_PLATE",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [
+        "LicencePlate"
+      ],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "podaci o vozilu",
+      "intent": "GET_VEHICLE_DATA",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "informacije o vozilu",
+      "intent": "GET_VEHICLE_DATA",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "info o autu",
+      "intent": "GET_VEHICLE_DATA",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "pokazi moje bookinge",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "moji bookingsi",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "prikazi bookinge",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "daj mi podatke o autu",
+      "intent": "GET_VEHICLE_DATA",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "daj podatke o vozilu",
+      "intent": "GET_VEHICLE_DATA",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "podaci o autu",
+      "intent": "GET_VEHICLE_DATA",
+      "primary_tool": "get_MasterData",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "vehicle_info"
+    },
+    {
+      "query": "pokazi moje bookinge",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "prikazi moje bookinge",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
+    },
+    {
+      "query": "daj moje bookinge",
+      "intent": "GET_BOOKINGS",
+      "primary_tool": "get_VehicleCalendar",
+      "alternative_tools": [],
+      "extract_fields": [],
+      "response_template": null,
+      "category": "booking_management"
     }
   ],
   "generated_at": "2025-12-26T11:22:34.442795",

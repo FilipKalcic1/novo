@@ -277,18 +277,44 @@ def normalize_context_key(param_name: str) -> str:
 
 # Patterns indicating READ intent (questions, show commands)
 READ_INTENT_PATTERNS = [
-    # Croatian questions
-    r'koja?\s+je', r'što\s+je', r'kolika?\s+je', r'kakv[aoi]?\s+je',
-    r'koja?\s+su', r'koji?\s+su', r'koliko\s+ima',
-    r'kako\s+se\s+zove', r'sto\s+je', r'kakvo\s+je',
+    # Croatian questions (with flexible word order)
+    r'^koj[aei]?\b',           # koja, koje, koji at start
+    r'\bkoj[aei]?\s+\w+\s+su', # koja vozila su, koje stvari su
+    r'\bkoj[aei]?\s+\w+\s+je', # koja tablica je, koji broj je
+    r'što\s+je', r'sto\s+je',  # what is
+    r'^koliko\b',              # koliko at start (how much/many)
+    r'koliko?\s+je', r'kolika?\s+je',  # how much is
+    r'kakv[aoi]?\s+je',        # what kind is
+    r'koliko\s+ima',           # how many are there
+    r'kako\s+se\s+zove',       # what is it called
+    r'gdje\s+je', r'di\s+je',  # where is
+    r'kada\s+je', r'kad\s+je', # when is
     # Croatian commands for reading
-    r'prikaži', r'pokaži', r'daj\s+mi', r'reci\s+mi',
-    r'pronađi', r'nađi', r'traži', r'pretraži',
-    r'prikazi', r'pokazi',  # Without diacritics
+    r'\bprikaži\b', r'\bpokaži\b', r'\bdaj\s+mi\b', r'\breci\s+mi\b',
+    r'\bpronađi\b', r'\bnađi\b', r'\btraži\b', r'\bpretraži\b',
+    r'\bprikazi\b', r'\bpokazi\b',  # Without diacritics
+    r'\bprovjeri\b', r'\bprovjeriti\b',  # check
+    r'\bdohvati\b', r'\bučitaj\b',  # fetch, load
+    # Availability questions
+    r'\bslobodn[aio]\b',       # slobodna, slobodno, slobodni
+    r'\bdostupn[aio]\b',       # dostupna, dostupno, dostupni
+    r'\bima\s+li\b',           # is there
+    # User's own data (possessive + noun = READ)
+    r'\bmoje?\s+rezervacij',   # moje rezervacije
+    r'\bmoje?\s+vozil',        # moje vozilo
+    r'\bmoja\s+',              # moja (anything)
+    # Status/expiry questions
+    r'\bisti[cč]e\b',          # istice/ističe (expires)
+    r'\btrenutn[aio]\b',       # trenutna/trenutno/trenutni (current)
+    r'\bstanje\b',             # stanje (status/state)
+    r'\bstatus\b',             # status
+    # Mileage/distance questions
+    r'\bkilometra[zž]\b',      # kilometraža
+    r'\bkm\b',                 # km
     # English questions
     r'what\s+is', r'what\s+are', r'how\s+much', r'how\s+many',
     r'show\s+me', r'tell\s+me', r'get\s+me', r'find',
-    r'list', r'display', r'view',
+    r'list', r'display', r'view', r'check',
     # Common question patterns
     r'\?$',  # Ends with question mark
     r'^ima\s+li', r'^postoji\s+li',  # Croatian questions
@@ -297,13 +323,42 @@ READ_INTENT_PATTERNS = [
 
 # Patterns indicating MUTATION intent (delete, create, update)
 MUTATION_INTENT_PATTERNS = [
-    r'obriši', r'izbriši', r'ukloni', r'makni',  # Croatian delete
-    r'delete', r'remove', r'erase', r'destroy',  # English delete
+    # Delete/cancel patterns
+    r'obri[sš]i', r'izbri[sš]i', r'ukloni', r'makni',  # Croatian delete
+    r'otka[zž]i', r'poni[sš]ti',   # cancel, annul
+    r'delete', r'remove', r'erase', r'destroy', r'cancel',  # English
+    # Create patterns
     r'dodaj', r'kreiraj', r'napravi', r'stvori',  # Croatian create
     r'add', r'create', r'make', r'new',  # English create
-    r'promijeni', r'ažuriraj', r'izmijeni', r'uredi',  # Croatian update
+    r'unesi', r'upi[sš]i', r'unos',  # Croatian input (with/without diacritics)
+    r'moram\s+upisati', r'moram\s+unijeti',  # must enter
+    # Update patterns
+    r'promijeni', r'a[zž]uriraj', r'izmijeni', r'uredi',  # Croatian update
     r'update', r'change', r'modify', r'edit',  # English update
-    r'želim\s+obrisati', r'hoću\s+obrisati',  # Explicit Croatian intent
+    # Report/submit patterns
+    r'\bprijavi\b', r'\bprijava\b',  # report
+    r'\bpo[sš]alji\b', r'\bsend\b', # send
+    r'\bzapi[sš]i\b', r'\bbook\b',  # record, book
+    r'\brezerviraj\b',              # reserve
+    # Booking intent
+    r'\btrebam\s+auto\b',           # need a car
+    r'\btrebam\s+vozilo\b',         # need a vehicle
+    r'\btrebam\s+rezerv',           # need to reserve (trebam rezervirati)
+    r'rezervirati',                 # to reserve
+    # Explicit intent
+    r'[zž]elim\s+obrisati', r'ho[cć]u\s+obrisati',
+    r'[zž]elim\s+prijaviti', r'ho[cć]u\s+prijaviti',
+    r'trebam\s+prijaviti',
+    # Damage/accident descriptions (implicit report intent)
+    r'imam\s+kvar', r'imam\s+[sš]tet',
+    r'dogodila.*nesre[cć]', r'imao.*sudar',
+    r'\budario\b', r'\budarila\b',  # hit (masculine/feminine)
+    r'\bogrebao\b', r'\bogrebala\b', r'\bogrebotina\b',  # scratched
+    r'\bo[sš]tetio\b', r'\bo[sš]tetila\b',  # damaged
+    r'\bslomio\b', r'\bslomila\b',  # broke
+    r'\bproblem[aei]?\b.*\bmotor',   # problem/problema with engine
+    r'\bne\s+radi\b',               # doesn't work
+    r'\bpokvario\b', r'\bpokvarilo\b',  # broke down
 ]
 
 # Patterns indicating USER-SPECIFIC intent ("my vehicle", "moje vozilo")

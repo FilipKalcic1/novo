@@ -12,7 +12,10 @@
       "Bash(docker volume:*)",
       "Bash(docker exec:*)",
       "Bash(cat:*)",
-      "Bash(python -m scripts.generate_documentation:*)"
+      "Bash(python -m scripts.generate_documentation:*)",
+      "Bash(timeout 20 docker logs:*)",
+      "Bash(python:*)",
+      "Bash(docker-compose logs:*)"
     ]
   }
 }
