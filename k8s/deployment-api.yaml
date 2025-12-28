@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: novo-api
+  namespace: novo-bot
+  labels:
+    app: novo-bot
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: novo-bot
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: novo-bot
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Graceful shutdown: Give pods time to drain connections
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: api
+          image: your-registry/novo-bot:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+
+          # =================================================================
+          # ENVIRONMENT VARIABLES
+          # =================================================================
+          envFrom:
+            - configMapRef:
+                name: novo-config
+            - secretRef:
+                name: novo-secrets
+
+          # Construct DATABASE_URL from parts
+          env:
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://$(DATABASE_USER):$(DB_PASSWORD)@$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)"
+
+          # =================================================================
+          # RESOURCE LIMITS
+          # =================================================================
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+          # =================================================================
+          # PROBES
+          # =================================================================
+
+          # Liveness: Is the process alive?
+          # If this fails 3 times, Kubernetes restarts the pod
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Readiness: Is the app ready to receive traffic?
+          # If this fails, pod is removed from service endpoints
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Startup: For slow-starting containers
+          # Allows up to 5 minutes for initial startup (embedding generation)
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30  # 30 * 10s = 5 minutes max startup time
+
+          # =================================================================
+          # VOLUME MOUNTS
+          # =================================================================
+          volumeMounts:
+            - name: cache-volume
+              mountPath: /app/.cache
+
+      # =================================================================
+      # VOLUMES
+      # =================================================================
+      volumes:
+        - name: cache-volume
+          emptyDir:
+            sizeLimit: 500Mi
+
+      # =================================================================
+      # POD AFFINITY/ANTI-AFFINITY
+      # =================================================================
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: novo-bot
+                    component: api
+                topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: novo-api-pdb
+  namespace: novo-bot
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: novo-bot
+      component: api

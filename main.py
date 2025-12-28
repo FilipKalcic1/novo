@@ -6,8 +6,8 @@ Main entry point with automatic database initialization.
 """
 
 import asyncio
-import logging
-import sys
+import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -17,18 +17,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-# Configure logging FIRST
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# Configure structured logging FIRST (before any other imports)
+from services.logging_config import configure_logging, get_logger, set_trace_id
 
-# Reduce noise from verbose libraries (CRITICAL for production readability)
-logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
-logging.getLogger('httpx').setLevel(logging.WARNING)
+# Use JSON logging in production, console in development
+is_production = os.getenv('APP_ENV', 'development') == 'production'
+configure_logging(json_format=is_production, log_level=os.getenv('LOG_LEVEL', 'INFO'))
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Import config
 from config import get_settings
@@ -134,9 +130,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.error(f"❌ Service initialization failed: {e}")
         raise
-    
-    logger.info("🎉 Application ready!")
-    
+
+    # 4. Initialize metrics
+    from services.metrics import set_app_info
+    set_app_info(version=settings.APP_VERSION, environment=settings.APP_ENV)
+    logger.info("Prometheus metrics initialized")
+
+    logger.info("Application ready!")
+
     yield
     
     # Shutdown
@@ -170,6 +171,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Trace ID middleware for distributed tracing
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    """Add trace ID to each request for distributed tracing."""
+    # Use existing trace ID from header or generate new one
+    trace_id = request.headers.get("X-Trace-ID") or str(uuid.uuid4())[:8]
+    set_trace_id(trace_id)
+
+    # Log request start
+    logger.info(
+        "Request started",
+        method=request.method,
+        path=request.url.path,
+        trace_id=trace_id
+    )
+
+    response = await call_next(request)
+
+    # Add trace ID to response headers
+    response.headers["X-Trace-ID"] = trace_id
+
+    # Log request completion
+    logger.info(
+        "Request completed",
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        trace_id=trace_id
+    )
+
+    return response
+
+
 # Include routers
 # Simple webhook endpoint that pushes to Redis queue
 from webhook_simple import router as webhook_router
@@ -183,39 +218,63 @@ if settings.DEBUG:
             logger.debug(f"Registered non-HTTP route: {route.name if hasattr(route, 'name') else route}")
 
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
+@app.get("/health/live")
+async def liveness_check():
+    """
+    Liveness probe - checks if the process is running.
+
+    This should NOT check external dependencies (DB, Redis).
+    If this fails, Kubernetes will restart the pod.
+    """
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def readiness_check():
+    """
+    Readiness probe - checks if the app is ready to serve traffic.
+
+    Checks all external dependencies. If this fails, Kubernetes
+    will remove the pod from the load balancer (but not restart).
+    """
     from database import engine
-    
+    from fastapi.responses import JSONResponse
+
     checks = {
-        "status": "healthy",
+        "status": "ready",
         "version": settings.APP_VERSION,
         "database": "disconnected",
         "redis": "disconnected",
         "tools": 0
     }
-    
+
     try:
         # Check database
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         checks["database"] = "connected"
-        
+
         # Check redis
         if hasattr(app.state, 'redis') and app.state.redis:
             await app.state.redis.ping()
             checks["redis"] = "connected"
-        
+
         # Check tools
         if hasattr(app.state, 'registry') and app.state.registry:
             checks["tools"] = len(app.state.registry.tools)
-            
+
     except Exception as e:
-        checks["status"] = "unhealthy"
+        checks["status"] = "not_ready"
         checks["error"] = str(e)
-    
+        return JSONResponse(status_code=503, content=checks)
+
     return checks
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint (legacy, redirects to readiness)."""
+    return await readiness_check()
 
 
 @app.get("/")
@@ -226,6 +285,13 @@ async def root():
         "version": settings.APP_VERSION,
         "status": "running"
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from services.metrics import get_metrics
+    return get_metrics()
 
 
 @app.exception_handler(Exception)

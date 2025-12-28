@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: novo-worker
+  namespace: novo-bot
+  labels:
+    app: novo-bot
+    component: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: novo-bot
+      component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: novo-bot
+        component: worker
+    spec:
+      # Graceful shutdown: Workers need time to finish processing
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: worker
+          image: your-registry/novo-bot:latest
+          imagePullPolicy: Always
+          command: ["python", "worker.py"]
+
+          # =================================================================
+          # ENVIRONMENT VARIABLES
+          # =================================================================
+          envFrom:
+            - configMapRef:
+                name: novo-config
+            - secretRef:
+                name: novo-secrets
+
+          # Construct DATABASE_URL from parts
+          env:
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://$(DATABASE_USER):$(DB_PASSWORD)@$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)"
+
+          # =================================================================
+          # RESOURCE LIMITS
+          # Workers may need more memory for embedding generation
+          # =================================================================
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+
+          # =================================================================
+          # PROBES
+          # Workers don't serve HTTP, so we use exec probes
+          # =================================================================
+
+          # Liveness: Check if the worker process is responding
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import sys; sys.exit(0)"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # =================================================================
+          # VOLUME MOUNTS
+          # =================================================================
+          volumeMounts:
+            - name: cache-volume
+              mountPath: /app/.cache
+
+      # =================================================================
+      # VOLUMES
+      # =================================================================
+      volumes:
+        - name: cache-volume
+          emptyDir:
+            sizeLimit: 500Mi
+
+      # =================================================================
+      # POD AFFINITY/ANTI-AFFINITY
+      # =================================================================
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: novo-bot
+                    component: worker
+                topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: novo-worker-pdb
+  namespace: novo-bot
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: novo-bot
+      component: worker

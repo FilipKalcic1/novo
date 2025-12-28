@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: novo-bot
+  labels:
+    app: novo-bot
+    environment: production

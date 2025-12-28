@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: novo-config
+  namespace: novo-bot
+  labels:
+    app: novo-bot
+data:
+  # ==========================================================================
+  # Application Settings
+  # ==========================================================================
+  APP_ENV: "production"
+  APP_NAME: "MobilityOne Bot"
+  APP_VERSION: "11.0.0"
+  LOG_LEVEL: "INFO"
+
+  # ==========================================================================
+  # MobilityOne API (non-sensitive)
+  # ==========================================================================
+  MOBILITY_API_URL: "https://api.mobilityone.example.com"
+  MOBILITY_AUTH_URL: "https://login.microsoftonline.com/your-tenant/oauth2/v2.0/token"
+  MOBILITY_TENANT_ID: "your-tenant-id"
+
+  # ==========================================================================
+  # Azure OpenAI (non-sensitive)
+  # ==========================================================================
+  AZURE_OPENAI_ENDPOINT: "https://your-instance.openai.azure.com"
+  AZURE_OPENAI_API_VERSION: "2024-08-01-preview"
+  AZURE_OPENAI_DEPLOYMENT_NAME: "gpt-4o-mini"
+  AZURE_OPENAI_EMBEDDING_DEPLOYMENT: "text-embedding-ada-002"
+
+  # ==========================================================================
+  # Infobip (non-sensitive)
+  # ==========================================================================
+  INFOBIP_BASE_URL: "api.infobip.com"
+  INFOBIP_SENDER_NUMBER: "your-sender-number"
+
+  # ==========================================================================
+  # Database & Redis (connection strings without passwords)
+  # Passwords are injected from secrets
+  # ==========================================================================
+  DATABASE_HOST: "postgres-service"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "mobility_db"
+  DATABASE_USER: "appuser"
+  REDIS_URL: "redis://redis-service:6379/0"
+
+  # ==========================================================================
+  # AI Settings
+  # ==========================================================================
+  AI_MAX_ITERATIONS: "6"
+  AI_TEMPERATURE: "0.2"
+  AI_MAX_TOKENS: "1500"
+  SIMILARITY_THRESHOLD: "0.55"
+  ACTION_THRESHOLD: "0.75"
+
+  # ==========================================================================
+  # Cache TTL (seconds)
+  # ==========================================================================
+  CACHE_TTL_TOKEN: "3500"
+  CACHE_TTL_USER: "300"
+  CACHE_TTL_CONTEXT: "86400"
+  CACHE_TTL_TOOLS: "3600"
+  CACHE_TTL_CONVERSATION: "1800"
+
+  # ==========================================================================
+  # Rate Limiting
+  # ==========================================================================
+  RATE_LIMIT_PER_MINUTE: "20"
+  RATE_LIMIT_WINDOW: "60"

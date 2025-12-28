@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: novo-api-service
+  namespace: novo-bot
+  labels:
+    app: novo-bot
+    component: api
+spec:
+  type: ClusterIP
+  selector:
+    app: novo-bot
+    component: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+
+---
+# Headless service for internal service discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: novo-api-headless
+  namespace: novo-bot
+  labels:
+    app: novo-bot
+    component: api
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: novo-bot
+    component: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+
+---
+# Ingress for external access (adjust for your ingress controller)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: novo-api-ingress
+  namespace: novo-bot
+  annotations:
+    # For NGINX ingress controller
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # For Azure Application Gateway
+    # appgw.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx  # Change to your ingress class
+  tls:
+    - hosts:
+        - novo-bot.your-domain.com
+      secretName: novo-tls-secret  # Create with cert-manager or manually
+  rules:
+    - host: novo-bot.your-domain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: novo-api-service
+                port:
+                  number: 80
