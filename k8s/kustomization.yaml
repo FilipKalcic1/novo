@@ -27,6 +27,8 @@ resources:
   - deployment-worker.yaml
   - service.yaml
   - hpa.yaml
+  # Uncomment after setting up cert-manager:
+  # - tls-secret.yaml
 
 # Common labels applied to all resources
 commonLabels:
