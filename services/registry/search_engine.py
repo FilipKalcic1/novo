@@ -27,8 +27,16 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+# Module-level cache for JSON files (loaded once, reused)
+_json_file_cache: Dict[str, Optional[Dict]] = {}
+
+
 def _load_json_file(filename: str) -> Optional[Dict]:
-    """Load JSON file from config or data directory."""
+    """Load JSON file from config or data directory with caching."""
+    # Return cached result if available
+    if filename in _json_file_cache:
+        return _json_file_cache[filename]
+
     base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
     paths = [
@@ -36,15 +44,19 @@ def _load_json_file(filename: str) -> Optional[Dict]:
         os.path.join(base_path, "data", filename),
     ]
 
+    result = None
     for path in paths:
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    result = json.load(f)
+                    break
             except Exception as e:
                 logger.warning(f"Failed to load {path}: {e}")
 
-    return None
+    # Cache the result (even if None)
+    _json_file_cache[filename] = result
+    return result
 
 
 class SearchEngine:
@@ -249,15 +261,10 @@ class SearchEngine:
         """Apply penalties/boosts based on detected intent."""
         query_lower = query.lower().strip()
 
-        is_read_intent = any(
-            re.search(pattern, query_lower)
-            for pattern in READ_INTENT_PATTERNS
-        )
-
-        is_mutation_intent = any(
-            re.search(pattern, query_lower)
-            for pattern in MUTATION_INTENT_PATTERNS
-        )
+        # Use pre-compiled patterns for performance
+        from services.patterns import is_read_intent as check_read, is_mutation_intent as check_mutation
+        is_read_intent = check_read(query_lower)
+        is_mutation_intent = check_mutation(query_lower)
 
         if is_mutation_intent:
             return scored

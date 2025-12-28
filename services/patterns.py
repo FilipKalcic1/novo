@@ -383,6 +383,34 @@ USER_SPECIFIC_PATTERNS = [
     r'do\s+i\s+have', r'i\s+have',
 ]
 
+# ═══════════════════════════════════════════════════════════════
+# PRE-COMPILED PATTERNS (Performance optimization)
+# ═══════════════════════════════════════════════════════════════
+# Compiled once at module load, reused on every call
+
+READ_INTENT_COMPILED = [re.compile(p, re.IGNORECASE) for p in READ_INTENT_PATTERNS]
+MUTATION_INTENT_COMPILED = [re.compile(p, re.IGNORECASE) for p in MUTATION_INTENT_PATTERNS]
+USER_SPECIFIC_COMPILED = [re.compile(p, re.IGNORECASE) for p in USER_SPECIFIC_PATTERNS]
+
+
+def is_read_intent(query: str) -> bool:
+    """Check if query indicates READ intent using pre-compiled patterns."""
+    query_lower = query.lower().strip()
+    return any(pattern.search(query_lower) for pattern in READ_INTENT_COMPILED)
+
+
+def is_mutation_intent(query: str) -> bool:
+    """Check if query indicates MUTATION intent using pre-compiled patterns."""
+    query_lower = query.lower().strip()
+    return any(pattern.search(query_lower) for pattern in MUTATION_INTENT_COMPILED)
+
+
+def is_user_specific(query: str) -> bool:
+    """Check if query indicates user-specific data using pre-compiled patterns."""
+    query_lower = query.lower().strip()
+    return any(pattern.search(query_lower) for pattern in USER_SPECIFIC_COMPILED)
+
+
 # Parameter names that indicate user-specific filtering capability
 USER_FILTER_PARAMS = {
     'personid', 'person_id',

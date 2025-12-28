@@ -116,6 +116,7 @@ class Worker:
         self._rate_limits: dict = {}
         self.rate_limit = settings.RATE_LIMIT_PER_MINUTE
         self.rate_window = settings.RATE_LIMIT_WINDOW
+        self._rate_limit_cleanup_counter = 0  # For periodic cleanup
 
         # Singleton services (initialized once at startup)
         self._gateway = None
@@ -671,10 +672,23 @@ class Worker:
         await self.redis.rpush("dlq:inbound", json.dumps(entry))
     
     def _check_rate_limit(self, identifier: str) -> bool:
-        """Check rate limit."""
+        """Check rate limit with periodic cleanup of stale entries."""
         now = time.time()
         window_start = now - self.rate_window
-        
+
+        # Periodic cleanup: every 100 calls, clean ALL stale entries
+        self._rate_limit_cleanup_counter += 1
+        if self._rate_limit_cleanup_counter >= 100:
+            self._rate_limit_cleanup_counter = 0
+            stale_keys = [
+                k for k, v in self._rate_limits.items()
+                if not v or max(v) < window_start
+            ]
+            for k in stale_keys:
+                del self._rate_limits[k]
+            if stale_keys:
+                logger.debug(f"Cleaned {len(stale_keys)} stale rate limit entries")
+
         if identifier in self._rate_limits:
             self._rate_limits[identifier] = [
                 t for t in self._rate_limits[identifier]
@@ -682,10 +696,10 @@ class Worker:
             ]
         else:
             self._rate_limits[identifier] = []
-        
+
         if len(self._rate_limits[identifier]) >= self.rate_limit:
             return False
-        
+
         self._rate_limits[identifier].append(now)
         return True
 
