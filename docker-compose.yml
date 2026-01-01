@@ -1,7 +1,42 @@
-version: '3.8'
-
 services:
-  # === PostgreSQL ===
+  # === 1. AUTOSCALER ===
+  autoscaler:
+    build:
+      context: .
+      dockerfile: Dockerfile.autoscaler # Napravit ćemo ovaj mali file
+    container_name: fleet_autoscaler
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/app
+    working_dir: /app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - QUEUE_NAME=task_queue
+    # Naredba ostaje ista
+    command: python3 autoscaler.py
+    networks:
+      - fleet_net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # === 2. AUTOHEAL ===
+  # Automatski restarta "unhealthy" kontejnere (npr. ako LLM poziv zapne)
+  autoheal:
+    image: willfarrell/autoheal
+    container_name: fleet_autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=300
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - fleet_net
+
+  # === 3. POSTGRESQL ===
   postgres:
     image: postgres:15-alpine
     container_name: fleet_postgres4
@@ -24,7 +59,7 @@ services:
     ports:
       - "5432:5432"
 
-  # === Redis ===
+  # === 4. REDIS ===
   redis:
     image: redis:7-alpine
     container_name: fleet_redis4
@@ -32,42 +67,26 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"  # Expose for local testing
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
-      retries: 10
     networks:
       - fleet_net
 
-  # === API Service ===
+  # === 5. API SERVICE ===
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: fleet_api4
     restart: unless-stopped
     ports:
       - "8000:8000"
-
-    # Učitaj sve iz .env datoteke (Best Practice)
     env_file:
       - .env
-
-    # Eksplicitni overrideovi (ako su potrebni za Docker mrežu)
     environment:
-      - APP_ENV=${APP_ENV:-development}
-      - DEBUG=${DEBUG:-true}
-      # Koristimo ime servisa 'postgres' i 'redis'
       - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
       - REDIS_URL=redis://redis:6379/0
-
-    # CRITICAL: Persist .cache directory with named volume (Docker-managed permissions)
     volumes:
-      - cache_data:/app/.cache
-
+      - ./.cache:/app/.cache:rw # KLJUČNO: Učitava tvoj postojeći lokalni cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,46 +96,42 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 10  # Increased: First startup takes ~3min (embedding generation)
-      start_period: 240s  # 4 minutes grace period for cache generation
+      retries: 5
+      start_period: 240s
+    labels:
+      - "autoheal=true"
     networks:
       - fleet_net
 
-  # === Worker Service ===
+  # === 6. WORKER SERVICE ===
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: fleet_worker4
+    build: .
     restart: unless-stopped
     command: python worker.py
-
-    # Učitaj sve iz .env datoteke
     env_file:
       - .env
-
     environment:
-      - APP_ENV=${APP_ENV:-development}
-      - DEBUG=${DEBUG:-true}
       - DATABASE_URL=postgresql+asyncpg://appuser:${DB_PASSWORD:-securepassword123}@postgres:5432/mobility_db
       - REDIS_URL=redis://redis:6379/0
-
-    # CRITICAL: Persist .cache directory with named volume (shared with API)
     volumes:
-      - cache_data:/app/.cache
-
+      - ./.cache:/app/.cache:rw # Workeri trebaju pisati u cache
     depends_on:
       api:
         condition: service_healthy
-      redis:
-        condition: service_started
+    labels:
+      - "autoheal=true"
     networks:
       - fleet_net
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python worker.py' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
 volumes:
   postgres_data:
   redis_data:
-  cache_data:  # Shared cache volume (Docker-managed permissions)
 
 networks:
   fleet_net:

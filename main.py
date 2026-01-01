@@ -41,21 +41,21 @@ async def wait_for_database(max_retries: int = 30, delay: int = 2) -> bool:
     from database import engine, Base
     from models import UserMapping, Conversation, Message, ToolExecution, AuditLog  # noqa
     
-    logger.info("⏳ Waiting for database...")
+    logger.info("Waiting for database...")
     
     for attempt in range(max_retries):
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
             
-            logger.info("✅ Database connection established")
+            logger.info("Database connection established")
             
             # Create tables
-            logger.info("📊 Creating database tables...")
+            logger.info("Creating database tables...")
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             
-            logger.info("✅ Database tables ready")
+            logger.info("Database tables ready")
             return True
             
         except Exception as e:
@@ -63,19 +63,19 @@ async def wait_for_database(max_retries: int = 30, delay: int = 2) -> bool:
             if attempt < max_retries - 1:
                 await asyncio.sleep(delay)
     
-    logger.error("❌ Could not connect to database after all retries")
+    logger.error("Could not connect to database after all retries")
     return False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan manager."""
-    logger.info("🚀 Starting MobilityOne Bot v11.0...")
+    logger.info("Starting MobilityOne Bot v11.0...")
     
     # 1. Wait for database and create tables
     db_ready = await wait_for_database()
     if not db_ready:
-        logger.error("❌ Cannot start without database")
+        logger.error("Cannot start without database")
         raise RuntimeError("Database not available")
     
     # 2. Initialize Redis
@@ -88,9 +88,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         )
         await redis_client.ping()
         app.state.redis = redis_client
-        logger.info("✅ Redis connected")
+        logger.info("Redis connected")
     except Exception as e:
-        logger.error(f"❌ Redis connection failed: {e}")
+        logger.error(f"Redis connection failed: {e}")
         raise RuntimeError(f"Redis not available: {e}")
     
     # 3. Initialize services
@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         
         # API Gateway
         app.state.gateway = APIGateway(redis_client=app.state.redis)
-        logger.info("✅ API Gateway initialized")
+        logger.info("API Gateway initialized")
         
         # Tool Registry
         app.state.registry = ToolRegistry(redis_client=app.state.redis)
@@ -113,34 +113,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         success = await app.state.registry.initialize(settings.swagger_sources)
 
         if not success:
-            logger.error("❌ Tool Registry initialization failed")
+            logger.error("Tool Registry initialization failed")
             raise RuntimeError("Tool Registry initialization failed")
 
-        logger.info(f"✅ Tool Registry: {len(app.state.registry.tools)} tools")
+        logger.info(f"Tool Registry: {len(app.state.registry.tools)} tools")
         
         # Queue Service
         app.state.queue = QueueService(app.state.redis)
         await app.state.queue.create_consumer_group()
-        logger.info("✅ Queue Service initialized")
+        logger.info("Queue Service initialized")
         
         # Cache Service
         app.state.cache = CacheService(app.state.redis)
-        logger.info("✅ Cache Service initialized")
+        logger.info("Cache Service initialized")
         
         # Context Service
         app.state.context = ContextService(app.state.redis)
-        logger.info("✅ Context Service initialized")
+        logger.info("Context Service initialized")
         
     except Exception as e:
-        logger.error(f"❌ Service initialization failed: {e}")
+        logger.error(f"Service initialization failed: {e}")
         raise
     
-    logger.info("🎉 Application ready!")
+    logger.info("Application ready!")
     
     yield
     
     # Shutdown
-    logger.info("🛑 Shutting down...")
+    logger.info("Shutting down...")
     
     if hasattr(app.state, 'gateway') and app.state.gateway:
         await app.state.gateway.close()
@@ -148,7 +148,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     if hasattr(app.state, 'redis') and app.state.redis:
         await app.state.redis.aclose()
     
-    logger.info("👋 Goodbye!")
+    logger.info("Goodbye!")
 
 
 # Create FastAPI app

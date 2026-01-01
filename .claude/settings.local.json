@@ -15,7 +15,10 @@
       "Bash(python -m scripts.generate_documentation:*)",
       "Bash(timeout 20 docker logs:*)",
       "Bash(python:*)",
-      "Bash(docker-compose logs:*)"
+      "Bash(docker-compose logs:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker inspect:*)"
     ]
   }
 }

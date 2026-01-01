@@ -48,12 +48,12 @@ async def whatsapp_webhook(request: Request):
     try:
         body = await request.json()
 
-        logger.info(f"📩 Received WhatsApp webhook: {body}")
+        logger.info(f"Received WhatsApp webhook: {body}")
 
         # Extract message details from Infobip format
         results = body.get("results", [])
         if not results:
-            logger.warning("⚠️ No results in webhook body")
+            logger.warning("No results in webhook body")
             return {"status": "ok"}
 
         for result in results:
@@ -65,7 +65,7 @@ async def whatsapp_webhook(request: Request):
             # Without sender, we cannot reply - this would cause 400 error
             if not sender:
                 logger.error(
-                    "❌ MISSING SENDER in webhook! "
+                    "MISSING SENDER in webhook! "
                     f"message_id={message_id}, content_types={[c.get('type') for c in content_list]}"
                 )
                 continue
@@ -81,7 +81,7 @@ async def whatsapp_webhook(request: Request):
                 # Log what type of content we received (image, location, etc.)
                 content_types = [c.get("type") for c in content_list]
                 logger.warning(
-                    f"⚠️ No text content in message from {sender[-4:]}... "
+                    f"No text content in message from {sender[-4:]}... "
                     f"Content types: {content_types}"
                 )
                 continue
@@ -96,12 +96,12 @@ async def whatsapp_webhook(request: Request):
             redis = await get_redis()
             await redis.xadd("whatsapp_stream_inbound", stream_data)
 
-            logger.info(f"✅ Message pushed to stream: {sender[-4:]}... - {text[:30]}")
+            logger.info(f"Message pushed to stream: {sender[-4:]}... - {text[:30]}")
 
         return {"status": "ok"}
 
     except Exception as e:
-        logger.error(f"❌ Webhook error: {e}", exc_info=True)
+        logger.error(f"Webhook error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -116,8 +116,8 @@ async def whatsapp_webhook_verify(request: Request):
     challenge = request.query_params.get("hub.challenge")
 
     if mode == "subscribe" and token == "your_verify_token":
-        logger.info("✅ WhatsApp webhook verified")
+        logger.info("WhatsApp webhook verified")
         return int(challenge)
 
-    logger.warning("⚠️ WhatsApp webhook verification failed")
+    logger.warning("WhatsApp webhook verification failed")
     raise HTTPException(status_code=403, detail="Verification failed")

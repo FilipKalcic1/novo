@@ -1,65 +1,61 @@
-# MobilityOne WhatsApp Bot
-# Version: 11.0 - Production Ready
-# 
-# Changes from v10:
-# - Added postgresql-client for database initialization
-# - Added proper health checks
-# - Non-root user for security
-# - Multi-stage could be added for smaller image
+# MobilityOne WhatsApp Bot - Final Production Dockerfile
+# Verzija: 11.0.2
+# Fokus: Stabilnost, sigurnost i optimizacija tokena (cache)
 
 FROM python:3.11-slim
 
-# Build arguments
-ARG APP_VERSION=11.0.0
-
-# Environment - no secrets here, all from runtime env
+# 1. OSNOVNE POSTAVKE OKOLINE
+# PYTHONDONTWRITEBYTECODE: Sprječava pisanje .pyc datoteka (čisti kontejner)
+# PYTHONUNBUFFERED: Osigurava da logovi odmah izlaze u konzolu (bitno za Docker logove)
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    APP_VERSION=${APP_VERSION}
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies including PostgreSQL client
+# 2. INSTALACIJA SISTEMSKIH PAKETA + TINI
+# tini: Ključan za ispravno rukovanje signalima (SIGTERM). Bez njega worker ne staje odmah pri skaliranju.
+# postgresql-client: Za init skripte baze podataka.
+# curl: Za healthcheck pozive.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     postgresql-client \
     curl \
+    tini \
+    procps \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Create app directory
 WORKDIR /app
 
-# Copy requirements first for Docker layer caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
-
-# Copy application code
-COPY . .
-
-# Make init script executable
-RUN chmod +x /app/docker/init-db.sh 2>/dev/null || true
-
-# Create non-root user for security
-RUN groupadd -r appgroup && \
-    useradd -r -g appgroup appuser && \
+# 3. SIGURNOST I PRIPREMA CACHE-A
+# Kreiramo non-root korisnika (appuser) jer je pokretanje bota kao root ogroman rizik.
+# Unaprijed kreiramo .cache direktorij kako bismo mu dodijelili vlasništvo prije nego se spoji volumen.
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser && \
     mkdir -p /app/.cache && \
     chown -R appuser:appgroup /app
 
-# Switch to non-root user
+# 4. OPTIMIZACIJA SLOJEVA (Caching)
+# Prvo kopiramo samo requirements.txt. Ako se kod mijenja, a biblioteke ne, Docker preskače ovaj spori korak.
+COPY --chown=appuser:appgroup requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# 5. KOPIRANJE APLIKACIJE
+# Kopiramo cijeli projekt. Ako tvoj .cache folder postoji u root-u, bit će kopiran unutra.
+COPY --chown=appuser:appgroup . .
+
+# Osiguravamo da je init skripta izvršna (ako postoji)
+RUN chmod +x /app/docker/init-db.sh 2>/dev/null || true
+
+# 6. AKTIVACIJA KORISNIKA
 USER appuser
 
-# Expose port
-EXPOSE 8000
+# 7. ENTRYPOINT & COMMAND
+# ENTRYPOINT postavlja tini kao PID 1. On će proslijediti signale Pythonu.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Health check - will be overridden per-service in docker-compose
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Default command (overridden in docker-compose for worker)
+# Defaultna naredba je za API servis. 
+# Worker će u docker-compose.yml ovo zamijeniti s "python worker.py"
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
