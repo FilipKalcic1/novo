@@ -13,8 +13,70 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, List, Optional
+from decimal import Decimal
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
+
+
+def _make_json_safe(obj: Any, max_depth: int = 10) -> Any:
+    """
+    Recursively convert object to JSON-serializable format.
+
+    CRITICAL: This prevents flow state loss due to serialization failures.
+    Complex API objects are converted to simple dicts/strings.
+    """
+    if max_depth <= 0:
+        return str(obj) if obj is not None else None
+
+    if obj is None:
+        return None
+
+    # Already JSON-safe primitives
+    if isinstance(obj, (bool, int, float, str)):
+        return obj
+
+    # Convert common non-serializable types
+    if isinstance(obj, (datetime,)):
+        return obj.isoformat()
+
+    if isinstance(obj, (Decimal,)):
+        return float(obj)
+
+    if isinstance(obj, (UUID,)):
+        return str(obj)
+
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode('utf-8')
+        except:
+            return str(obj)
+
+    # Handle lists
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_safe(item, max_depth - 1) for item in obj]
+
+    # Handle dicts
+    if isinstance(obj, dict):
+        safe_dict = {}
+        for key, value in obj.items():
+            # Ensure key is string
+            safe_key = str(key) if not isinstance(key, str) else key
+            safe_dict[safe_key] = _make_json_safe(value, max_depth - 1)
+        return safe_dict
+
+    # Handle objects with __dict__
+    if hasattr(obj, '__dict__'):
+        try:
+            return _make_json_safe(obj.__dict__, max_depth - 1)
+        except:
+            return str(obj)
+
+    # Fallback: convert to string
+    try:
+        return str(obj)
+    except:
+        return "<non-serializable>"
 
 
 class ConversationState(str, Enum):
@@ -128,27 +190,61 @@ class ConversationManager:
                 # INFO level to ensure we see state loading
                 logger.info(
                     f"CONV LOADED: user={self.user_id[-4:]}, state={self.context.state}, "
-                    f"flow={self.context.current_flow}, missing={self.context.missing_params}"
+                    f"flow={self.context.current_flow}, tool={self.context.current_tool}, "
+                    f"missing={self.context.missing_params}, items={len(self.context.displayed_items)}"
                 )
             else:
-                logger.info(f"CONV LOADED: user={self.user_id[-4:]}, NO STATE IN REDIS (fresh)")
+                logger.info(f"CONV LOADED: user={self.user_id[-4:]}, NO STATE IN REDIS (fresh start)")
             self._loaded = True
         except Exception as e:
-            logger.warning(f"Failed to load state: {e}")
+            logger.error(f"CONV LOAD FAILED: user={self.user_id[-4:]}, error={e}", exc_info=True)
             self._loaded = True
     
     async def save(self) -> None:
-        """Save state to Redis."""
+        """Save state to Redis with JSON-safe conversion."""
         if not self.redis:
             return
-        
+
         try:
             self.context.last_updated = datetime.utcnow().isoformat()
-            data = json.dumps(asdict(self.context))
+
+            # CRITICAL FIX: Convert to JSON-safe format BEFORE serialization
+            # This prevents flow state loss due to complex API objects
+            context_dict = asdict(self.context)
+            safe_dict = _make_json_safe(context_dict)
+
+            data = json.dumps(safe_dict, ensure_ascii=False)
             await self.redis.setex(self._redis_key, self.REDIS_TTL, data)
-            logger.debug(f"Saved state for {self.user_id[-4:]}")
+
+            # CRITICAL: Log at INFO level to track state saves
+            logger.info(
+                f"CONV SAVED: user={self.user_id[-4:]}, state={self.context.state}, "
+                f"flow={self.context.current_flow}, tool={self.context.current_tool}, "
+                f"items={len(self.context.displayed_items)}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to save state: {e}")
+            # CRITICAL: Log with stack trace for debugging!
+            logger.error(
+                f"CRITICAL: Failed to save state for {self.user_id[-4:]}: {e}",
+                exc_info=True
+            )
+            # Try to save minimal state as fallback
+            try:
+                minimal_state = {
+                    "state": self.context.state,
+                    "current_flow": self.context.current_flow,
+                    "current_tool": self.context.current_tool,
+                    "missing_params": self.context.missing_params,
+                    "last_updated": datetime.utcnow().isoformat()
+                }
+                await self.redis.setex(
+                    self._redis_key,
+                    self.REDIS_TTL,
+                    json.dumps(minimal_state)
+                )
+                logger.warning(f"Saved MINIMAL state for {self.user_id[-4:]} as fallback")
+            except Exception as e2:
+                logger.error(f"Even minimal state save failed: {e2}")
     
     async def clear(self) -> None:
         """Clear state from Redis."""

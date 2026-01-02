@@ -136,8 +136,20 @@ class FlowHandler:
         if hasattr(conv_manager.context, 'tool_outputs'):
             conv_manager.context.tool_outputs["VehicleId"] = vehicle_id
             conv_manager.context.tool_outputs["vehicleId"] = vehicle_id
-            # Store all vehicles for "show me others" requests
-            conv_manager.context.tool_outputs["all_available_vehicles"] = items
+
+            # CRITICAL FIX: Store only minimal vehicle data to prevent JSON serialization issues
+            # Full API objects can contain non-serializable fields that break Redis storage
+            minimal_vehicles = []
+            for v in items:
+                minimal_vehicles.append({
+                    "Id": v.get("Id") or v.get("VehicleId"),
+                    "DisplayName": v.get("DisplayName") or v.get("FullVehicleName") or v.get("Name") or "Vozilo",
+                    "LicencePlate": v.get("LicencePlate") or v.get("Plate") or "N/A"
+                })
+            conv_manager.context.tool_outputs["all_available_vehicles"] = minimal_vehicles
+            conv_manager.context.tool_outputs["vehicle_count"] = len(items)
+
+            logger.info(f"Stored {len(minimal_vehicles)} vehicles for booking flow")
 
         conv_manager.context.current_tool = "post_VehicleCalendar"
 
@@ -510,7 +522,22 @@ class FlowHandler:
             if current_flow == "case_creation" and tool_name == "post_AddCase":
                 return await self._show_case_confirmation(params, user_context, conv_manager)
 
-            # Default: let new request handler continue (e.g., booking)
+            # BOOKING FLOW: Execute availability check with collected params
+            if current_flow == "booking" and tool_name == "get_AvailableVehicles":
+                logger.info("GATHERING: Booking flow - executing availability check")
+                result = await self.handle_availability(
+                    tool_name=tool_name,
+                    parameters=params,
+                    user_context=user_context,
+                    conv_manager=conv_manager
+                )
+                if result.get("needs_input"):
+                    return result["prompt"]
+                if result.get("final_response"):
+                    return result["final_response"]
+                return result.get("error", "Greška pri provjeri dostupnosti.")
+
+            # Default: let new request handler continue
             return await handle_new_request_fn(sender, text, user_context, conv_manager)
 
         still_missing = conv_manager.get_missing_params()

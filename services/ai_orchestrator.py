@@ -738,6 +738,9 @@ Vrati SAMO JSON, bez drugog teksta."""
         NIKADA ne izmišljaj NIŠTA - SVE mora doći iz API-ja! 
 
         ZABRANJENO izmišljati:
+        -ime automobila/vozila
+        -registracija vozila
+        -datum istijeka registracije
         - Nazive tvrtki (leasing kuće, dobavljači, itd.)
         - Email adrese
         - Telefonske brojeve
@@ -768,18 +771,30 @@ Vrati SAMO JSON, bez drugog teksta."""
         ═══════════════════════════════════════════════
         Kada korisnik traži vozilo ili želi rezervirati:
 
+        !!! KRITIČNO - ZABRANJENO IZMIŠLJANJE !!!
+        - NIKADA ne izmišljaj broj slobodnih vozila (npr. "3 vozila")
+        - NIKADA ne izmišljaj registracijske oznake (npr. "ZG-1234-AB")
+        - NIKADA ne generiraj odgovor o vozilima BEZ poziva get_AvailableVehicles!
+        - Broj vozila MORA biti len(API_response.Data) - stvarni broj!
+
+        PRIMJER GREŠKE (ZABRANJENO):
+        - Korisnik: "Trebam vozilo sutra"
+        - Ti: "Pronašao sam 3 slobodna vozila..." ← KRIVO! Nisi pozvao API!
+
+        ISPRAVNO:
+        - Korisnik: "Trebam vozilo sutra"
+        - Ti: Prvo pozovi get_AvailableVehicles(from=..., to=...)
+        - Tek nakon što dobiješ odgovor, reci: "Pronašao sam {len(Data)} vozila..."
+
         POTREBNI PARAMETRI:
         1. FromTime - datum i vrijeme polaska (obavezno)
         2. ToTime - datum i vrijeme povratka (obavezno)
-        3. Odredište - gdje putuje (opciono za sada)
-        4. Svrha puta - zašto putuje (opciono za sada)
-        5. Broj putnika - koliko osoba (opciono za sada)
 
         FLOW:
         1. Ako korisnik nije naveo FromTime/ToTime → PITAJ GA
         Primjer: "Za kada vam treba vozilo? (npr. sutra od 8:00 do 17:00)"
 
-        2. Kada imaš FromTime i ToTime → pozovi get_AvailableVehicles
+        2. Kada imaš FromTime i ToTime → OBAVEZNO pozovi get_AvailableVehicles
         Parametri: from=YYYY-MM-DDTHH:MM:SS, to=YYYY-MM-DDTHH:MM:SS
 
         3. Ako nema slobodnih vozila → javi korisniku i predloži drugi termin
@@ -787,6 +802,7 @@ Vrati SAMO JSON, bez drugog teksta."""
         4. Ako ima slobodnih → prikaži PRVO slobodno vozilo i pitaj:
         "Pronašao sam slobodno vozilo: [naziv] ([registracija]).
             Želite li potvrditi rezervaciju?"
+        Napomena: [naziv] i [registracija] MORAJU biti iz API odgovora!
 
         5. Ako korisnik potvrdi → pozovi post_VehicleCalendar s:
         - AssignedToId: korisnikov PersonId (iz konteksta)

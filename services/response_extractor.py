@@ -202,12 +202,53 @@ Izvuci SAMO ono što korisnik traži. Budi koncizan."""
                 max_tokens=500
             )
 
-            content = response.choices[0].message.content
-            return content.strip()
+            content = response.choices[0].message.content.strip()
+
+            # VALIDATION: Check for potential hallucination indicators
+            self._validate_extraction(content, data, query)
+
+            return content
 
         except Exception as e:
             logger.error(f"LLM extraction error: {e}")
             raise
+
+    def _validate_extraction(self, extracted: str, original_data: Dict[str, Any], query: str) -> None:
+        """
+        Validate that extracted data doesn't contain hallucinated values.
+
+        Logs warnings if potential hallucinations are detected.
+        """
+        import re
+
+        # Check for suspicious patterns that might indicate hallucination
+
+        # 1. Check for vehicle count claims
+        count_match = re.search(r'(\d+)\s*(vozil|auto)', extracted.lower())
+        if count_match:
+            claimed_count = int(count_match.group(1))
+            # Check if Data field exists with actual count
+            actual_data = original_data.get("Data", original_data)
+            if isinstance(actual_data, list):
+                actual_count = len(actual_data)
+                if claimed_count != actual_count:
+                    logger.warning(
+                        f"POTENTIAL HALLUCINATION: LLM claimed {claimed_count} vehicles, "
+                        f"but API returned {actual_count}. Query: '{query[:50]}'"
+                    )
+
+        # 2. Check for registration plates not in original data
+        plate_matches = re.findall(r'[A-Z]{2,3}[-\s]?\d{3,4}[-\s]?[A-Z]{1,2}', extracted)
+        if plate_matches:
+            data_str = json.dumps(original_data).upper()
+            for plate in plate_matches:
+                # Normalize plate for comparison
+                normalized = plate.replace("-", "").replace(" ", "")
+                if normalized not in data_str.replace("-", "").replace(" ", ""):
+                    logger.warning(
+                        f"POTENTIAL HALLUCINATION: Plate '{plate}' not found in API data. "
+                        f"Query: '{query[:50]}'"
+                    )
 
     def _format_fallback(self, data: Dict[str, Any], query: str) -> str:
         """Fallback formatting when LLM fails."""

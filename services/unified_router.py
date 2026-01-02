@@ -143,6 +143,16 @@ class UnifiedRouter:
     def _check_exit_signal(self, query: str) -> bool:
         """Check if query contains exit/cancellation signal."""
         query_lower = query.lower()
+
+        # CRITICAL: "pokaži ostala" and similar are NOT exit signals!
+        # They mean user wants to see more options within the current flow
+        continue_signals = [
+            "pokaz", "ostala", "druga", "više", "vise", "jos",
+            "sva vozila", "lista", "popis"
+        ]
+        if any(signal in query_lower for signal in continue_signals):
+            return False
+
         return any(signal in query_lower for signal in EXIT_SIGNALS)
 
     def _check_greeting(self, query: str) -> Optional[str]:
@@ -255,7 +265,49 @@ class UnifiedRouter:
                 confidence=1.0
             )
 
-        # 3. Build LLM prompt
+        # 3. CRITICAL: Handle in-flow continue signals explicitly
+        # This prevents LLM hallucination for common in-flow actions
+        if in_flow:
+            query_lower = query.lower()
+            state = conversation_state.get("state", "")
+
+            # "pokaži ostala" type requests in CONFIRMING/SELECTING state
+            if any(s in query_lower for s in ["pokaz", "ostala", "druga", "više", "vise", "sva vozila", "lista"]):
+                logger.info(f"UNIFIED ROUTER: 'show more' detected in flow, returning continue_flow")
+                return RouterDecision(
+                    action="continue_flow",
+                    reasoning="Show more items request in active flow",
+                    confidence=1.0
+                )
+
+            # Confirmation responses (da/ne) in CONFIRMING state
+            if state == "confirming":
+                if any(w in query_lower for w in ["da", "potvrdi", "ok", "yes", "može", "moze"]):
+                    logger.info(f"UNIFIED ROUTER: Confirmation 'yes' detected, returning continue_flow")
+                    return RouterDecision(
+                        action="continue_flow",
+                        reasoning="User confirmed in confirming state",
+                        confidence=1.0
+                    )
+                if any(w in query_lower for w in ["ne", "odustani", "cancel", "no"]):
+                    logger.info(f"UNIFIED ROUTER: Confirmation 'no' detected, returning continue_flow")
+                    return RouterDecision(
+                        action="continue_flow",
+                        reasoning="User cancelled in confirming state",
+                        confidence=1.0
+                    )
+
+            # Numeric selection in SELECTING state
+            if state == "selecting":
+                if query.strip().isdigit() or len(query.strip()) <= 3:
+                    logger.info(f"UNIFIED ROUTER: Numeric selection detected, returning continue_flow")
+                    return RouterDecision(
+                        action="continue_flow",
+                        reasoning="User selected item by number",
+                        confidence=1.0
+                    )
+
+        # 4. Build LLM prompt
         return await self._llm_route(query, user_context, conversation_state)
 
     async def _llm_route(
@@ -316,8 +368,12 @@ PRAVILA:
 
 1. AKO je korisnik U TIJEKU flow-a:
    - Ako korisnik daje tražene parametre → action="continue_flow"
-   - Ako korisnik želi NEŠTO DRUGO (ne vezano uz flow) → action="exit_flow"
-   - PREPOZNAJ: "ne želim", "odustani", "nešto drugo", "zapravo hoću..." = exit_flow
+   - Ako korisnik potvrđuje (Da/Ne) → action="continue_flow"
+   - Ako korisnik traži prikaz ostalih opcija ("pokaži ostala", "druga vozila") → action="continue_flow"
+   - Ako korisnik bira broj ("1", "2", "prvi") → action="continue_flow"
+   - SAMO ako korisnik EKSPLICITNO želi PREKINUTI flow → action="exit_flow"
+   - PREPOZNAJ exit SAMO za: "ne želim ovo", "odustani od rezervacije", "zapravo nešto drugo"
+   - "pokaži ostala", "koja još vozila", "više opcija" NIJE exit - to je continue_flow!
 
 2. AKO korisnik NIJE u flow-u:
    - Ako treba pokrenuti flow (rezervacija, unos km, prijava štete) → action="start_flow"

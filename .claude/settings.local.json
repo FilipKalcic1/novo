@@ -18,7 +18,12 @@
       "Bash(docker-compose logs:*)",
       "Bash(docker-compose:*)",
       "Bash(docker compose:*)",
-      "Bash(docker inspect:*)"
+      "Bash(docker inspect:*)",
+      "Bash(timeout 10 docker-compose logs --tail=30 worker)",
+      "Bash(sort:*)",
+      "Bash(timeout 10 docker-compose logs:*)",
+      "Bash(timeout 15 docker-compose:*)",
+      "Bash(timeout 5 docker-compose logs:*)"
     ]
   }
 }

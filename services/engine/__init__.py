@@ -278,13 +278,44 @@ class MessageEngine:
         """Process message based on conversation state using Unified Router."""
         state = conv_manager.get_state()
 
-        # DEBUG: Log current state for troubleshooting flow issues
+        # CRITICAL DEBUG: Log current state for troubleshooting flow issues
+        is_in_flow = conv_manager.is_in_flow()
         logger.info(
             f"STATE CHECK: user={sender[-4:]}, state={state.value}, "
-            f"flow={conv_manager.get_current_flow()}, "
+            f"is_in_flow={is_in_flow}, flow={conv_manager.get_current_flow()}, "
             f"tool={conv_manager.get_current_tool()}, "
-            f"missing={conv_manager.get_missing_params()}"
+            f"missing={conv_manager.get_missing_params()}, "
+            f"has_items={len(conv_manager.get_displayed_items())}"
         )
+
+        # === CRITICAL FIX: Direct state-based handling for in-flow messages ===
+        # Before calling unified router, handle obvious in-flow cases directly
+        # This prevents router hallucination from breaking flows
+        if is_in_flow:
+            text_lower = text.lower()
+
+            # In CONFIRMING state - handle confirmations and "show more" directly
+            if state == ConversationState.CONFIRMING:
+                # Check for "show more" type requests
+                if any(s in text_lower for s in ["pokaz", "ostala", "druga", "više", "vise", "sva vozila", "lista", "popis"]):
+                    logger.info("DIRECT HANDLER: 'show more' in CONFIRMING state")
+                    return await self._flow_handler.handle_confirmation(
+                        sender, text, user_context, conv_manager
+                    )
+                # Check for confirmation/cancellation
+                if any(w in text_lower for w in ["da", "potvrdi", "ok", "yes", "može", "moze", "ne", "odustani", "cancel", "no"]):
+                    logger.info("DIRECT HANDLER: confirmation response in CONFIRMING state")
+                    return await self._flow_handler.handle_confirmation(
+                        sender, text, user_context, conv_manager
+                    )
+
+            # In SELECTING state - handle numeric selection directly
+            if state == ConversationState.SELECTING_ITEM:
+                if text.strip().isdigit() or any(s in text_lower for s in ["prvi", "drugi", "treći", "treci"]):
+                    logger.info("DIRECT HANDLER: item selection in SELECTING state")
+                    return await self._flow_handler.handle_selection(
+                        sender, text, user_context, conv_manager, self._handle_new_request
+                    )
 
         # === v19.0: UNIFIED ROUTER - Single decision point ===
         # Initialize unified router lazily
@@ -357,6 +388,7 @@ class MessageEngine:
 
         # 3. Continue flow - user is providing requested info
         if decision.action == "continue_flow":
+            # CRITICAL: Handle based on ACTUAL state, not router's guess
             if state == ConversationState.SELECTING_ITEM:
                 return await self._flow_handler.handle_selection(
                     sender, text, user_context, conv_manager, self._handle_new_request
@@ -369,6 +401,10 @@ class MessageEngine:
                 return await self._flow_handler.handle_gathering(
                     sender, text, user_context, conv_manager, self._handle_new_request
                 )
+            # If we're supposedly in a flow but state is IDLE, try to recover
+            if state == ConversationState.IDLE and conv_manager.get_current_flow():
+                logger.warning(f"STATE MISMATCH: is_in_flow but state=IDLE, treating as new request")
+                # Fall through to new request handling
 
         # 4. Start flow - begin a multi-step flow
         if decision.action == "start_flow":
@@ -1072,10 +1108,16 @@ class MessageEngine:
                         vehicle_name = v.get("DisplayName") or v.get("FullVehicleName") or "Vozilo"
                         plate = v.get("LicencePlate") or ""
 
-                        # Store for later
+                        # Store for later - ONLY minimal data to prevent serialization issues
                         if hasattr(conv_manager.context, 'tool_outputs'):
                             conv_manager.context.tool_outputs["VehicleId"] = vehicle_id
-                            conv_manager.context.tool_outputs["all_available_vehicles"] = vehicles
+                            # Store only minimal vehicle data
+                            minimal_vehicles = [{
+                                "Id": v.get("Id"),
+                                "DisplayName": v.get("DisplayName") or v.get("FullVehicleName") or "Vozilo",
+                                "LicencePlate": v.get("LicencePlate") or v.get("Plate") or ""
+                            } for v in vehicles]
+                            conv_manager.context.tool_outputs["all_available_vehicles"] = minimal_vehicles
             except Exception as e:
                 logger.warning(f"Failed to fetch vehicles for mileage: {e}")
 
