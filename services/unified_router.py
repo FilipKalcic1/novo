@@ -34,6 +34,7 @@ from pathlib import Path
 from openai import AsyncAzureOpenAI
 
 from config import get_settings
+from services.query_router import QueryRouter, RouteResult
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -118,6 +119,9 @@ class UnifiedRouter:
             timeout=30.0
         )
         self.model = settings.AZURE_OPENAI_DEPLOYMENT_NAME
+
+        # Query Router - brza staza za poznate patterne
+        self.query_router = QueryRouter()
 
         # Training examples
         self._training_examples: List[Dict] = []
@@ -307,7 +311,18 @@ class UnifiedRouter:
                         confidence=1.0
                     )
 
-        # 4. Build LLM prompt
+        # 4. QUERY ROUTER - Brza staza za poznate patterne (0 tokena, <1ms)
+        # Ovo štedi ~80% LLM poziva za jednostavne upite
+        qr_result = self.query_router.route(query, user_context)
+        if qr_result.matched and qr_result.confidence >= 1.0:
+            # Samo ako je SIGURAN match (confidence=1.0) - izbjegavamo false positives
+            logger.info(
+                f"UNIFIED ROUTER: Fast path via QueryRouter → "
+                f"{qr_result.tool_name or qr_result.flow_type} (conf={qr_result.confidence})"
+            )
+            return self._query_result_to_decision(qr_result)
+
+        # 5. LLM poziv - za kompleksne upite koje Query Router ne prepoznaje
         return await self._llm_route(query, user_context, conversation_state)
 
     async def _llm_route(
@@ -354,58 +369,58 @@ class UnifiedRouter:
         # Build system prompt
         system_prompt = f"""Ti si routing sustav za MobilityOne fleet management bot.
 
-TVOJ ZADATAK: Odluči što napraviti s korisnikovim upitom.
+        TVOJ ZADATAK: Odluči što napraviti s korisnikovim upitom.
 
-{vehicle_info}
+        {vehicle_info}
 
-{flow_info}
+        {flow_info}
 
-{tools_desc}
+        {tools_desc}
 
-{examples}
+        {examples}
 
-PRAVILA:
+        PRAVILA:
 
-1. AKO je korisnik U TIJEKU flow-a:
-   - Ako korisnik daje tražene parametre → action="continue_flow"
-   - Ako korisnik potvrđuje (Da/Ne) → action="continue_flow"
-   - Ako korisnik traži prikaz ostalih opcija ("pokaži ostala", "druga vozila") → action="continue_flow"
-   - Ako korisnik bira broj ("1", "2", "prvi") → action="continue_flow"
-   - SAMO ako korisnik EKSPLICITNO želi PREKINUTI flow → action="exit_flow"
-   - PREPOZNAJ exit SAMO za: "ne želim ovo", "odustani od rezervacije", "zapravo nešto drugo"
-   - "pokaži ostala", "koja još vozila", "više opcija" NIJE exit - to je continue_flow!
+        1. AKO je korisnik U TIJEKU flow-a:
+        - Ako korisnik daje tražene parametre → action="continue_flow"
+        - Ako korisnik potvrđuje (Da/Ne) → action="continue_flow"
+        - Ako korisnik traži prikaz ostalih opcija ("pokaži ostala", "druga vozila") → action="continue_flow"
+        - Ako korisnik bira broj ("1", "2", "prvi") → action="continue_flow"
+        - SAMO ako korisnik EKSPLICITNO želi PREKINUTI flow → action="exit_flow"
+        - PREPOZNAJ exit SAMO za: "ne želim ovo", "odustani od rezervacije", "zapravo nešto drugo"
+        - "pokaži ostala", "koja još vozila", "više opcija" NIJE exit - to je continue_flow!
 
-2. AKO korisnik NIJE u flow-u:
-   - Ako treba pokrenuti flow (rezervacija, unos km, prijava štete) → action="start_flow"
-   - Ako je jednostavan upit (dohvat podataka) → action="simple_api"
-   - Ako je pozdrav ili zahvala → action="direct_response"
+        2. AKO korisnik NIJE u flow-u:
+        - Ako treba pokrenuti flow (rezervacija, unos km, prijava štete) → action="start_flow"
+        - Ako je jednostavan upit (dohvat podataka) → action="simple_api"
+        - Ako je pozdrav ili zahvala → action="direct_response"
 
-3. ODABIR ALATA:
-   - "unesi km", "upiši kilometražu", "mogu li upisati" → post_AddMileage (WRITE!)
-   - "koliko imam km", "moja kilometraža" → get_MasterData (READ)
-   - "registracija", "tablica", "podaci o vozilu" → get_MasterData
-   - "slobodna vozila", "dostupna vozila" → get_AvailableVehicles
-   - "trebam auto", "rezerviraj" → get_AvailableVehicles (pa flow)
-   - "moje rezervacije" → get_VehicleCalendar
-   - "prijavi štetu", "kvar", "udario sam" → post_AddCase
-   - "troškovi" → get_Expenses
-   - "tripovi", "putovanja" → get_Trips
+        3. ODABIR ALATA:
+        - "unesi km", "upiši kilometražu", "mogu li upisati" → post_AddMileage (WRITE!)
+        - "koliko imam km", "moja kilometraža" → get_MasterData (READ)
+        - "registracija", "tablica", "podaci o vozilu" → get_MasterData
+        - "slobodna vozila", "dostupna vozila" → get_AvailableVehicles
+        - "trebam auto", "rezerviraj" → get_AvailableVehicles (pa flow)
+        - "moje rezervacije" → get_VehicleCalendar
+        - "prijavi štetu", "kvar", "udario sam" → post_AddCase
+        - "troškovi" → get_Expenses
+        - "tripovi", "putovanja" → get_Trips
 
-4. FLOW TYPES:
-   - booking: za rezervacije
-   - mileage: za unos kilometraže
-   - case: za prijavu štete/kvara
+        4. FLOW TYPES:
+        - booking: za rezervacije
+        - mileage: za unos kilometraže
+        - case: za prijavu štete/kvara
 
-ODGOVORI U JSON FORMATU:
-{{
-    "action": "continue_flow|exit_flow|start_flow|simple_api|direct_response",
-    "tool": "ime_alata ili null",
-    "params": {{}},
-    "flow_type": "booking|mileage|case ili null",
-    "response": "tekst odgovora za direct_response ili null",
-    "reasoning": "kratko objašnjenje odluke",
-    "confidence": 0.0-1.0
-}}"""
+        ODGOVORI U JSON FORMATU:
+        {{
+            "action": "continue_flow|exit_flow|start_flow|simple_api|direct_response",
+            "tool": "ime_alata ili null",
+            "params": {{}},
+            "flow_type": "booking|mileage|case ili null",
+            "response": "tekst odgovora za direct_response ili null",
+            "reasoning": "kratko objašnjenje odluke",
+            "confidence": 0.0-1.0
+        }}"""
 
         user_prompt = f'Korisnikov upit: "{query}"'
 
@@ -464,51 +479,80 @@ ODGOVORI U JSON FORMATU:
         query: str,
         user_context: Dict[str, Any]
     ) -> RouterDecision:
-        """Fallback routing when LLM fails."""
-        query_lower = query.lower()
+        """Fallback routing when LLM fails - uses QueryRouter's regex rules."""
+        logger.warning(f"LLM routing failed, using QueryRouter fallback for: '{query[:50]}...'")
 
-        # Simple keyword-based fallback
-        if any(w in query_lower for w in ["unesi", "upiši", "upisi"]) and "km" in query_lower or "kilometr" in query_lower:
-            return RouterDecision(
-                action="start_flow",
-                tool="post_AddMileage",
-                flow_type="mileage",
-                reasoning="Fallback: mileage keywords",
-                confidence=0.5
-            )
+        # Koristi Query Router - ima 51 regex pravilo, puno bolje od basic keyword matching
+        qr_result = self.query_router.route(query, user_context)
 
-        if any(w in query_lower for w in ["šteta", "kvar", "udario", "prijavi"]):
-            return RouterDecision(
-                action="start_flow",
-                tool="post_AddCase",
-                flow_type="case",
-                reasoning="Fallback: case keywords",
-                confidence=0.5
-            )
+        if qr_result.matched:
+            logger.info(f"FALLBACK: QueryRouter matched → {qr_result.tool_name or qr_result.flow_type}")
+            return self._query_result_to_decision(qr_result, is_fallback=True)
 
-        if any(w in query_lower for w in ["rezerv", "booking", "trebam auto", "trebam vozilo"]):
-            return RouterDecision(
-                action="start_flow",
-                tool="get_AvailableVehicles",
-                flow_type="booking",
-                reasoning="Fallback: booking keywords",
-                confidence=0.5
-            )
-
-        if any(w in query_lower for w in ["slobodn", "dostupn"]):
-            return RouterDecision(
-                action="simple_api",
-                tool="get_AvailableVehicles",
-                reasoning="Fallback: availability keywords",
-                confidence=0.5
-            )
-
-        # Default to MasterData for vehicle info
+        # Ultimate fallback - samo ako ni QueryRouter ne match-uje
+        logger.warning(f"FALLBACK: QueryRouter no match, defaulting to get_MasterData")
         return RouterDecision(
             action="simple_api",
             tool="get_MasterData",
-            reasoning="Fallback: default to vehicle info",
+            reasoning="Ultimate fallback: QueryRouter no match, default to vehicle info",
             confidence=0.3
+        )
+
+    def _query_result_to_decision(
+        self,
+        qr_result: RouteResult,
+        is_fallback: bool = False
+    ) -> RouterDecision:
+        """
+        Convert QueryRouter RouteResult to RouterDecision.
+
+        Args:
+            qr_result: Result from QueryRouter
+            is_fallback: True if called from fallback path (lower confidence)
+
+        Returns:
+            RouterDecision compatible with rest of system
+        """
+        # Confidence reduction for fallback path
+        confidence = qr_result.confidence * (0.8 if is_fallback else 1.0)
+        path_type = "fallback" if is_fallback else "fast path"
+
+        flow_type = qr_result.flow_type
+
+        # 1. Direct response (greetings, help, thanks)
+        if flow_type == "direct_response":
+            return RouterDecision(
+                action="direct_response",
+                response=qr_result.response_template,
+                reasoning=f"QueryRouter {path_type}: {qr_result.reason}",
+                confidence=confidence
+            )
+
+        # 2. Flows that need multi-step interaction
+        if flow_type in ("booking", "mileage_input", "case_creation"):
+            # Map flow_type to canonical names
+            canonical_flow = {
+                "booking": "booking",
+                "mileage_input": "mileage",
+                "case_creation": "case"
+            }.get(flow_type, flow_type)
+
+            return RouterDecision(
+                action="start_flow",
+                tool=qr_result.tool_name,
+                flow_type=canonical_flow,
+                reasoning=f"QueryRouter {path_type}: {qr_result.reason}",
+                confidence=confidence
+            )
+
+        # 3. Simple API calls (get_MasterData, get_VehicleCalendar, etc.)
+        # flow_type: "simple" or "list"
+        return RouterDecision(
+            action="simple_api",
+            tool=qr_result.tool_name,
+            flow_type=flow_type,
+            reasoning=f"QueryRouter {path_type}: {qr_result.reason}",
+            confidence=confidence
         )
 
 
